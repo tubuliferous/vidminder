@@ -10,19 +10,31 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// yt-dlp upload_date is YYYYMMDD; render it in a calendar-friendly way.
+// Resolve upload date from either yt-dlp's `upload_date` (YYYYMMDD string) or
+// the `timestamp` field returned by --flat-playlist + approximate_date.
+// Channel listings populate the timestamp but not the date string, so we need
+// the fallback to display anything for inbox / channel-view rows.
 // `style: "short"` omits the year when it matches the current year.
 export function formatUploadDate(
   raw: string | null | undefined,
-  style: "short" | "full" = "full"
+  style: "short" | "full" = "full",
+  timestamp?: number | null
 ): string {
-  if (!raw || raw.length < 8) return "";
-  const y = parseInt(raw.slice(0, 4), 10);
-  const m = parseInt(raw.slice(4, 6), 10);
-  const d = parseInt(raw.slice(6, 8), 10);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return "";
-  const date = new Date(y, m - 1, d);
-  if (Number.isNaN(date.getTime())) return "";
+  let date: Date | null = null;
+  if (raw && raw.length >= 8) {
+    const y = parseInt(raw.slice(0, 4), 10);
+    const m = parseInt(raw.slice(4, 6), 10);
+    const d = parseInt(raw.slice(6, 8), 10);
+    if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+      const d1 = new Date(y, m - 1, d);
+      if (!Number.isNaN(d1.getTime())) date = d1;
+    }
+  }
+  if (!date && timestamp && timestamp > 0) {
+    const d2 = new Date(timestamp * 1000);
+    if (!Number.isNaN(d2.getTime())) date = d2;
+  }
+  if (!date) return "";
   const sameYear = date.getFullYear() === new Date().getFullYear();
   if (style === "short" && sameYear) {
     return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });

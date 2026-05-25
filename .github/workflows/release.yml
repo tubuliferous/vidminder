@@ -26,13 +26,16 @@ jobs:
           - name: "macOS (Apple Silicon)"
             runner: "macos-latest"
             target: "aarch64-apple-darwin"
-            args: "--target aarch64-apple-darwin"
+            # Skip Tauri's DMG bundler (`bundle_dmg.sh`) — it's flaky on GitHub
+            # Actions macOS runners and fails within seconds with no useful
+            # error. We zip the .app ourselves in a later step.
+            args: "--target aarch64-apple-darwin --bundles app"
             sidecar_name: "yt-dlp-aarch64-apple-darwin"
             sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           - name: "macOS (Intel)"
             runner: "macos-13"
             target: "x86_64-apple-darwin"
-            args: "--target x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin --bundles app"
             sidecar_name: "yt-dlp-x86_64-apple-darwin"
             sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           - name: "Linux"
@@ -106,6 +109,32 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      - name: Package macOS .app as zip
+        if: startsWith(matrix.platform.runner, 'macos')
+        id: zip_mac
+        run: |
+          APP_DIR="src-tauri/target/${{ matrix.platform.target }}/release/bundle/macos"
+          if [ ! -d "$APP_DIR/VidMinder.app" ]; then
+            echo "VidMinder.app missing in $APP_DIR — listing:"
+            ls -la "$APP_DIR" || true
+            exit 1
+          fi
+          VERSION="${{ github.ref_name }}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then VERSION="dev"; fi
+          ZIP_NAME="VidMinder_${VERSION}_${{ matrix.platform.target }}.app.zip"
+          # `ditto -c -k --keepParent` produces a zip that preserves macOS
+          # metadata and decompresses to VidMinder.app cleanly.
+          (cd "$APP_DIR" && ditto -c -k --sequesterRsrc --keepParent "VidMinder.app" "$ZIP_NAME")
+          echo "zip_path=$APP_DIR/$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Attach macOS .app.zip to release
+        if: startsWith(matrix.platform.runner, 'macos') && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "${{ steps.zip_mac.outputs.zip_path }}" --clobber
+
       - name: Upload Windows installer artifact
         if: matrix.platform.runner == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
@@ -117,14 +146,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload macOS artifact
+      - name: Upload macOS artifact (push to main)
         if: startsWith(matrix.platform.runner, 'macos') && !startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: VidMinder-${{ matrix.platform.target }}
-          path: |
-            src-tauri/target/${{ matrix.platform.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.platform.target }}/release/bundle/macos/*.app
+          path: ${{ steps.zip_mac.outputs.zip_path }}
           if-no-files-found: warn
           retention-days: 7
 

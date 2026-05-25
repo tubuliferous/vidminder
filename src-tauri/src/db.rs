@@ -728,6 +728,23 @@ pub fn get_channel_video(conn: &Connection, id: i64) -> Result<Option<ChannelVid
     }
 }
 
+/// Force-update a channel_video's upload_timestamp by (channel, external id).
+/// Used to apply the authoritative timestamps from the YouTube RSS feed over
+/// yt-dlp's approximate values.
+pub fn set_channel_video_timestamp(
+    conn: &Connection,
+    channel_id: i64,
+    video_external_id: &str,
+    timestamp: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE channel_videos SET upload_timestamp = ?1
+         WHERE channel_id = ?2 AND video_external_id = ?3",
+        params![timestamp, channel_id, video_external_id],
+    )?;
+    Ok(())
+}
+
 pub fn dismiss_channel_video(conn: &Connection, id: i64) -> Result<()> {
     // An explicit dismiss clears the "auto-dismissed at follow" flag so the
     // automatic catch-up doesn't resurrect it on the next refresh.

@@ -67,7 +67,8 @@ export function InboxRow({
             </>
           )}
           <span className="text-[var(--color-ink-faint)]">
-            {formatUploadDate(cv.upload_date) || "Unknown date"}
+            {formatUploadDate(cv.upload_date, "short", cv.upload_timestamp) ||
+              "Unknown date"}
           </span>
         </div>
         <div className="mt-auto pt-2 flex items-center gap-2">

@@ -1,4 +1,5 @@
 mod db;
+mod youtube_rss;
 mod ytdlp;
 
 use db::{Channel, ChannelVideo, Db, NewChannel, NewChannelVideo, NewVideo, Video};
@@ -161,7 +162,7 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
 }
 
 async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
-    let listing = ytdlp::fetch_channel_listing(url, PER_CHANNEL_MAX_ENTRIES)
+    let mut listing = ytdlp::fetch_channel_listing(url, PER_CHANNEL_MAX_ENTRIES)
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
@@ -170,6 +171,9 @@ async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
     let source = listing.source();
     let thumb = listing.best_thumbnail();
     let external_id = listing.channel_id.clone().or_else(|| listing.id.clone());
+
+    // Replace approximate timestamps with exact ones from YouTube's RSS feed.
+    overlay_rss_timestamps(&mut listing.entries, external_id.as_deref()).await;
 
     let channel_id = {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
@@ -347,6 +351,31 @@ async fn refresh_channels(app: AppHandle) -> AppResult<RefreshSummary> {
     Ok(summary)
 }
 
+/// Replace `entry.timestamp` with the accurate value from YouTube's per-channel
+/// Atom feed, when available. Falls back silently to whatever yt-dlp gave us
+/// if the RSS request fails or the channel isn't a YouTube channel.
+async fn overlay_rss_timestamps(
+    entries: &mut [ytdlp::ChannelEntry],
+    channel_external_id: Option<&str>,
+) {
+    // Inline note: not a Tauri command; takes &mut references so we adjust
+    // entries in place after the yt-dlp call returns.
+    let Some(channel_id) = channel_external_id else {
+        return;
+    };
+    let dates = match youtube_rss::fetch_video_timestamps(channel_id).await {
+        Ok(map) if !map.is_empty() => map,
+        _ => return,
+    };
+    for entry in entries.iter_mut() {
+        if let Some(id) = entry.id.as_deref() {
+            if let Some(&ts) = dates.get(id) {
+                entry.timestamp = Some(ts);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 async fn catch_up_channel(
     channel_id: i64,
@@ -363,14 +392,30 @@ async fn catch_up_channel(
             .url
     };
 
-    let listing = ytdlp::fetch_channel_listing(&ch_url, PER_CHANNEL_MAX_ENTRIES)
+    let mut listing = ytdlp::fetch_channel_listing(&ch_url, PER_CHANNEL_MAX_ENTRIES)
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
+
+    // Look up the channel's external id so we can pull exact dates from RSS.
+    let channel_external_id: Option<String> = {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        db::get_channel(&conn, channel_id)
+            .map_err(|e| AppError::Generic(format!("{e:#}")))?
+            .and_then(|c| c.channel_id)
+    };
+    overlay_rss_timestamps(&mut listing.entries, channel_external_id.as_deref()).await;
 
     let mut surfaced_now: usize = 0;
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        // Force-apply RSS timestamps to existing rows (overwrites approximate).
+        for entry in &listing.entries {
+            if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
+                let _ = db::set_channel_video_timestamp(&conn, channel_id, ext_id, ts);
+            }
+        }
         // Backfill timestamps for any entries we already know about.
         for entry in &listing.entries {
             let Some(ext_id) = entry.id.as_deref() else {
@@ -548,12 +593,20 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
 
     for ch in channels {
         match ytdlp::fetch_channel_listing(&ch.url, PER_CHANNEL_MAX_ENTRIES).await {
-            Ok(listing) => {
+            Ok(mut listing) => {
+                overlay_rss_timestamps(&mut listing.entries, ch.channel_id.as_deref()).await;
                 let db = app.state::<Db>();
                 let conn = db
                     .0
                     .lock()
                     .map_err(|e| AppError::Generic(e.to_string()))?;
+                // Force-apply RSS timestamps even to rows already in the table
+                // (overwriting yt-dlp's approximate values).
+                for entry in &listing.entries {
+                    if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
+                        let _ = db::set_channel_video_timestamp(&conn, ch.id, ext_id, ts);
+                    }
+                }
                 for entry in &listing.entries {
                     let Some(ext_id) = entry.id.as_deref() else {
                         continue;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Channel, Filter, Video } from "../types";
 import { DRAG_MIME } from "../utils";
 import * as api from "../api";
@@ -85,38 +85,51 @@ function Row({
   onDropVideo,
 }: RowProps) {
   const [hover, setHover] = useState(false);
-  const drag = dropTarget && draggingVideo;
+  // Counter-based drag tracking — DOM dragenter/dragleave fire on every child
+  // boundary, which makes naive hover-state flicker. Increment on enter,
+  // decrement on leave, only flip hover when the count hits zero.
+  const dragDepth = useRef(0);
+  const drag = !!dropTarget && draggingVideo;
+
+  const carriesVideo = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types || []).includes(DRAG_MIME);
+
   return (
     <button
       onClick={onClick}
       onDragEnter={
         drag
           ? (e) => {
-              const types = Array.from(e.dataTransfer.types || []);
-              if (types.includes(DRAG_MIME)) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-                setHover(true);
-              }
+              if (!carriesVideo(e)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              dragDepth.current += 1;
+              if (dragDepth.current === 1) setHover(true);
             }
           : undefined
       }
       onDragOver={
         drag
           ? (e) => {
-              const types = Array.from(e.dataTransfer.types || []);
-              if (types.includes(DRAG_MIME)) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-              }
+              if (!carriesVideo(e)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
             }
           : undefined
       }
-      onDragLeave={drag ? () => setHover(false) : undefined}
+      onDragLeave={
+        drag
+          ? () => {
+              dragDepth.current = Math.max(0, dragDepth.current - 1);
+              if (dragDepth.current === 0) setHover(false);
+            }
+          : undefined
+      }
       onDrop={
         drag
           ? (e) => {
               const id = e.dataTransfer.getData(DRAG_MIME);
+              dragDepth.current = 0;
               setHover(false);
               if (!id) return;
               e.preventDefault();
@@ -127,18 +140,26 @@ function Row({
       className={
         "group flex items-center justify-between text-left text-[13px] rounded-md mx-1.5 px-2 py-[5px] transition-colors " +
         (hover
-          ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)] ring-1 ring-[var(--color-accent)]"
+          ? "bg-[var(--color-accent)] text-black ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]"
           : active
           ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
           : drag
-          ? "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] outline-dashed outline-1 outline-[var(--color-accent)]/40 outline-offset-[-2px]"
+          ? "text-[var(--color-ink-dim)] bg-[var(--color-surface-2)]/40 outline-dashed outline-2 outline-[var(--color-accent)]/55 outline-offset-[-3px]"
           : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
       }
     >
-      <span className="truncate flex-1">{label}</span>
-      <span className="flex items-center gap-1.5">
+      {/* pointer-events-none on children so dragenter/leave only fire on the
+          button itself — without it, moving across nested spans counted as
+          enter/leave events and made the hover state flicker. */}
+      <span className="pointer-events-none truncate flex-1">{label}</span>
+      <span className="pointer-events-none flex items-center gap-1.5">
         {badge != null && badge > 0 && (
-          <span className="text-[10px] tabular-nums px-1.5 py-[1px] rounded-full bg-[var(--color-accent)] text-black font-semibold">
+          <span
+            className={
+              "text-[10px] tabular-nums px-1.5 py-[1px] rounded-full font-semibold " +
+              (hover ? "bg-black/20 text-black" : "bg-[var(--color-accent)] text-black")
+            }
+          >
             {badge}
           </span>
         )}
@@ -146,7 +167,11 @@ function Row({
           <span
             className={
               "text-[11px] tabular-nums " +
-              (active || hover ? "text-[var(--color-ink-dim)]" : "text-[var(--color-ink-faint)]")
+              (hover
+                ? "text-black/70"
+                : active
+                ? "text-[var(--color-ink-dim)]"
+                : "text-[var(--color-ink-faint)]")
             }
           >
             {count}
