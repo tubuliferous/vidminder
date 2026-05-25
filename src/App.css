@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #0e1014;
+  --color-surface: #161922;
+  --color-surface-2: #1d2230;
+  --color-line: #262b39;
+  --color-line-soft: #2e3445;
+  --color-ink: #e8eaf0;
+  --color-ink-dim: #9ba1b3;
+  --color-ink-faint: #6b7080;
+  --color-accent: #6aa9ff;
+  --color-accent-dim: #2a4a7a;
+  --color-danger: #ff7a8a;
+}
+
+:root[data-theme="dark"] {
+  --color-canvas: #0e1014;
+  --color-surface: #161922;
+  --color-surface-2: #1d2230;
+  --color-line: #262b39;
+  --color-line-soft: #2e3445;
+  --color-ink: #e8eaf0;
+  --color-ink-dim: #9ba1b3;
+  --color-ink-faint: #6b7080;
+  --color-accent: #6aa9ff;
+  --color-accent-dim: #2a4a7a;
+  --color-danger: #ff7a8a;
+}
+
+:root[data-theme="light"] {
+  --color-canvas: #f5f6f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef1f6;
+  --color-line: #dfe3eb;
+  --color-line-soft: #cfd5e0;
+  --color-ink: #181c25;
+  --color-ink-dim: #555b69;
+  --color-ink-faint: #8a91a1;
+  --color-accent: #2a6ed1;
+  --color-accent-dim: #d4e3f7;
+  --color-danger: #cf2f4a;
+}
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-ink);
+  background-color: var(--color-canvas);
+
+  /* App-shell text is unselectable by default, matching native desktop apps.
+     Opt-in selection for descriptions, inputs, and explicitly tagged content
+     via the `.selectable` class below. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.selectable,
+code {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+a,
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+a:disabled,
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: default;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-ink) 22%, transparent);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-ink) 38%, transparent);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

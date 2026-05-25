@@ -1,0 +1,194 @@
+import { useMemo, useState } from "react";
+import type { Channel, ChannelVideo } from "../types";
+import {
+  recencyBucket,
+  RECENCY_LABELS,
+  RECENCY_ORDER,
+  type RecencyBucket,
+} from "../utils";
+import { InboxRow } from "./InboxRow";
+
+type Props = {
+  items: ChannelVideo[];
+  totalItems: number;
+  channels: Channel[];
+  searchQuery: string;
+  onClearSearch: () => void;
+  onAdd: (cv: ChannelVideo) => Promise<void> | void;
+  onDismiss: (cv: ChannelVideo) => Promise<void> | void;
+  onOpenAndDismiss: (cv: ChannelVideo) => Promise<void> | void;
+  refreshing: boolean;
+  onRefresh: () => void;
+};
+
+const BUCKET_HINTS: Record<RecencyBucket, string> = {
+  today: "Hot off the press — uploaded today.",
+  thisWeek: "From the past 7 days.",
+  thisMonth: "From the past month.",
+  older: "Sitting in your inbox for a while — older than a month.",
+};
+
+export function InboxView({
+  items,
+  totalItems,
+  channels,
+  searchQuery,
+  onClearSearch,
+  onAdd,
+  onDismiss,
+  onOpenAndDismiss,
+  refreshing,
+  onRefresh,
+}: Props) {
+  const isFiltered = searchQuery.trim().length > 0;
+  const [busy, setBusy] = useState<Set<number>>(new Set());
+
+  const grouped = useMemo(() => {
+    const m = new Map<RecencyBucket, ChannelVideo[]>();
+    for (const it of items) {
+      const b = recencyBucket(it.upload_date, it.first_seen_at, it.upload_timestamp);
+      if (!m.has(b)) m.set(b, []);
+      m.get(b)!.push(it);
+    }
+    return RECENCY_ORDER.flatMap((b) => {
+      const arr = m.get(b);
+      return arr && arr.length > 0 ? [{ bucket: b, videos: arr }] : [];
+    });
+  }, [items]);
+
+  const setItemBusy = (id: number, on: boolean) => {
+    setBusy((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const newCount = useMemo(
+    () =>
+      items.filter(
+        (cv) =>
+          recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp) !==
+          "older"
+      ).length,
+    [items]
+  );
+
+  const wrap = (id: number, fn: () => Promise<void> | void) => async () => {
+    setItemBusy(id, true);
+    try {
+      await fn();
+    } finally {
+      setItemBusy(id, false);
+    }
+  };
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <header className="sticky top-0 z-10 bg-[var(--color-canvas)]/95 backdrop-blur border-b border-[var(--color-line)] px-5 py-3 flex items-center justify-between">
+        <div>
+          <div className="text-[15px] font-semibold">Inbox</div>
+          <div className="text-[12px] text-[var(--color-ink-dim)]">
+            {isFiltered
+              ? `${items.length} match${items.length === 1 ? "" : "es"} of ${totalItems}`
+              : items.length === 0
+              ? "No new videos right now"
+              : `${newCount} new this month${
+                  items.length > newCount
+                    ? ` · ${items.length - newCount} earlier`
+                    : ""
+                }`}
+          </div>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          className={
+            "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors flex items-center gap-2 min-w-[112px] justify-center " +
+            (refreshing
+              ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
+              : "text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+          }
+        >
+          {refreshing && (
+            <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
+          )}
+          <span>{refreshing ? "Checking" : "Check now"}</span>
+        </button>
+      </header>
+
+      {items.length === 0 ? (
+        <div className="h-[60%] flex items-center justify-center text-center px-6">
+          <div>
+            {isFiltered ? (
+              <>
+                <div className="text-[15px] font-semibold mb-1.5">No inbox matches</div>
+                <div className="text-[12.5px] text-[var(--color-ink-dim)]">
+                  Nothing in your inbox matches “{searchQuery}”.
+                </div>
+                <button
+                  onClick={onClearSearch}
+                  className="mt-4 text-[12.5px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition"
+                >
+                  Clear search
+                </button>
+              </>
+            ) : channels.length === 0 ? (
+              <>
+                <div className="text-[16px] font-semibold mb-2">
+                  Follow a channel to start
+                </div>
+                <div className="text-[13px] text-[var(--color-ink-dim)] max-w-md leading-relaxed">
+                  Use “Follow this channel” on any video, or paste a channel URL like{" "}
+                  <code className="text-[var(--color-ink)]">youtube.com/@SomeChannel</code> into the
+                  Add URL field. VidMinder checks for new uploads every 30 minutes.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-[15px] font-semibold mb-1.5">All caught up</div>
+                <div className="text-[12.5px] text-[var(--color-ink-dim)]">
+                  Following {channels.length} {channels.length === 1 ? "channel" : "channels"} — no new uploads.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="pb-5">
+          {grouped.map(({ bucket, videos }) => (
+            <section key={bucket} className="mb-4">
+              <div className="sticky top-[57px] z-[5] bg-[var(--color-canvas)]/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-[var(--color-line)]/60">
+                <div className="flex items-baseline gap-3">
+                  <h3 className="text-[13px] font-semibold tracking-tight">
+                    {RECENCY_LABELS[bucket]}
+                  </h3>
+                  <span className="text-[11px] text-[var(--color-ink-faint)] tabular-nums">
+                    {videos.length}
+                  </span>
+                </div>
+                <span className="text-[11px] text-[var(--color-ink-faint)] hidden sm:block">
+                  {BUCKET_HINTS[bucket]}
+                </span>
+              </div>
+              <div className="px-5 pt-3 space-y-2">
+                {videos.map((cv) => (
+                  <InboxRow
+                    key={cv.id}
+                    cv={cv}
+                    busy={busy.has(cv.id)}
+                    onAdd={wrap(cv.id, () => onAdd(cv))}
+                    onDismiss={wrap(cv.id, () => onDismiss(cv))}
+                    onOpenAndDismiss={() => onOpenAndDismiss(cv)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+

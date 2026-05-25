@@ -1,0 +1,122 @@
+import { useEffect } from "react";
+import type { Settings, Theme } from "../settings";
+
+type Props = {
+  open: boolean;
+  settings: Settings;
+  onChange: (next: Partial<Settings>) => void;
+  onClose: () => void;
+};
+
+const THEMES: { key: Theme; label: string; hint: string }[] = [
+  { key: "dark", label: "Dark", hint: "Calm late-night palette" },
+  { key: "light", label: "Light", hint: "Bright surfaces" },
+  { key: "auto", label: "Auto", hint: "Follow system" },
+];
+
+export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center pt-24 bg-black/45 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-[520px] max-w-[92vw] rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] shadow-2xl p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="text-[16px] font-semibold leading-none">Settings</h2>
+            <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">⌘, to open · Esc to close</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-md text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <section className="space-y-2">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)]">
+            Appearance
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {THEMES.map((t) => {
+              const active = settings.theme === t.key;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => onChange({ theme: t.key })}
+                  className={
+                    "rounded-lg border px-3 py-2.5 text-left transition " +
+                    (active
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-dim)]/40"
+                      : "border-[var(--color-line)] hover:border-[var(--color-line-soft)] hover:bg-[var(--color-surface-2)]")
+                  }
+                >
+                  <div
+                    className={
+                      "text-[13px] font-medium " +
+                      (active ? "text-[var(--color-ink)]" : "text-[var(--color-ink-dim)]")
+                    }
+                  >
+                    {t.label}
+                  </div>
+                  <div className="text-[11px] text-[var(--color-ink-faint)] mt-0.5">
+                    {t.hint}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-6 pt-5 border-t border-[var(--color-line)]">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-2">
+            Library
+          </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.autoFavorite}
+              onChange={(e) => onChange({ autoFavorite: e.target.checked })}
+              className="mt-0.5 w-4 h-4 accent-[var(--color-accent)]"
+            />
+            <span>
+              <span className="text-[13px] block">Auto-favorite added videos</span>
+              <span className="text-[11.5px] text-[var(--color-ink-faint)]">
+                Star every video automatically when it's added (from drops, paste, or the inbox).
+              </span>
+            </span>
+          </label>
+        </section>
+
+        <section className="mt-6 pt-5 border-t border-[var(--color-line)] text-[11.5px] text-[var(--color-ink-faint)] leading-relaxed">
+          <div className="font-semibold text-[var(--color-ink-dim)] mb-1">Tips</div>
+          <ul className="list-disc pl-4 space-y-0.5">
+            <li>Drop a video URL anywhere to add it to your list.</li>
+            <li>Drop a channel URL (<code className="text-[var(--color-ink-dim)]">youtube.com/@channel</code>) to follow it.</li>
+            <li>Drag videos onto a folder, tag, or Favorites in the sidebar.</li>
+            <li>⌘Z undoes any change · Delete removes the highlighted video.</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  );
+}
