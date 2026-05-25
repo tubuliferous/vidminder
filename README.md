@@ -12,11 +12,13 @@ Grab the latest installer for your platform from the **[latest release](https://
 | Platform | File |
 | --- | --- |
 | Windows | `*_x64-setup.exe` (NSIS) or `*_x64_en-US.msi` |
-| macOS (Apple Silicon) | `*_aarch64.dmg` |
-| macOS (Intel) | `*_x64.dmg` |
+| macOS (Apple Silicon) | `VidMinder_*_aarch64-apple-darwin.app.zip` |
+| macOS (Intel) | `VidMinder_*_x86_64-apple-darwin.app.zip` |
 | Linux | `*.AppImage` or `*.deb` |
 
 > **Windows users**: The installer is unsigned, so SmartScreen will show a warning. Click *More info → Run anyway*.
+
+> **macOS users**: Unzip, drag `VidMinder.app` to Applications, then right-click it and choose *Open* the first time (Gatekeeper blocks unsigned apps on double-click). Or run `xattr -dr com.apple.quarantine /Applications/VidMinder.app` once.
 
 > Every release ships a self-contained build — yt-dlp is bundled, no separate install needed.
 
