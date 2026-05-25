@@ -103,7 +103,7 @@ jobs:
           args: ${{ matrix.platform.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('VidMinder {0}', github.ref_name) || '' }}
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
 
       - name: Upload Windows installer artifact
