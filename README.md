@@ -2,12 +2,12 @@
 
 An elegant, lightweight desktop app for collecting YouTube videos into a calm pool you'll actually get to. Drop URLs in, follow channels, watch in your browser. Cross-platform (Tauri 2 + React) — small binaries, no Electron.
 
-[![Build](https://github.com/YOUR_USERNAME/vidminder/actions/workflows/release.yml/badge.svg)](https://github.com/YOUR_USERNAME/vidminder/actions/workflows/release.yml)
-[![Latest release](https://img.shields.io/github/v/release/YOUR_USERNAME/vidminder?include_prereleases&label=latest)](https://github.com/YOUR_USERNAME/vidminder/releases/latest)
+[![Build](https://github.com/tubuliferous/vidminder/actions/workflows/release.yml/badge.svg)](https://github.com/tubuliferous/vidminder/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/tubuliferous/vidminder?include_prereleases&label=latest)](https://github.com/tubuliferous/vidminder/releases/latest)
 
 ## Download
 
-Grab the latest installer for your platform from the **[latest release](https://github.com/YOUR_USERNAME/vidminder/releases/latest)** page:
+Grab the latest installer for your platform from the **[latest release](https://github.com/tubuliferous/vidminder/releases/latest)** page:
 
 | Platform | File |
 | --- | --- |
@@ -37,8 +37,8 @@ brew install yt-dlp                    # or pipx install yt-dlp
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone, install deps, set up the yt-dlp sidecar, and run
-git clone https://github.com/YOUR_USERNAME/vidminder.git
-cd REPO_NAME
+git clone https://github.com/tubuliferous/vidminder.git
+cd vidminder
 npm install
 npm run install-sidecar          # symlinks system yt-dlp into src-tauri/binaries
 npm run tauri dev
