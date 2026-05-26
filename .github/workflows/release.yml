@@ -135,6 +135,67 @@ jobs:
         run: |
           gh release upload "${{ github.ref_name }}" "${{ steps.zip_mac.outputs.zip_path }}" --clobber
 
+      # Upload stable-named asset copies (no embedded version number) so the
+      # README can link to /releases/latest/download/VidMinder-windows.msi
+      # and have it keep working across version bumps. Each runner uploads
+      # only its own platform's copies — runs are parallel; --clobber handles
+      # rare reuploads on re-runs.
+      - name: Upload stable-named copies (Windows)
+        if: matrix.platform.runner == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/" -Filter "*.msi" | Select-Object -First 1
+          $exe = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/" -Filter "*-setup.exe" | Select-Object -First 1
+          if ($msi) {
+            Copy-Item $msi.FullName "VidMinder-windows.msi"
+            gh release upload $tag "VidMinder-windows.msi" --clobber
+          }
+          if ($exe) {
+            Copy-Item $exe.FullName "VidMinder-windows-setup.exe"
+            gh release upload $tag "VidMinder-windows-setup.exe" --clobber
+          }
+
+      - name: Upload stable-named copies (macOS)
+        if: startsWith(matrix.platform.runner, 'macos') && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          TARGET="${{ matrix.platform.target }}"
+          SRC="${{ steps.zip_mac.outputs.zip_path }}"
+          if [ "$TARGET" = "aarch64-apple-darwin" ]; then
+            DEST="VidMinder-macos-arm64.app.zip"
+          else
+            DEST="VidMinder-macos-intel.app.zip"
+          fi
+          cp "$SRC" "$DEST"
+          gh release upload "$TAG" "$DEST" --clobber
+
+      - name: Upload stable-named copies (Linux)
+        if: matrix.platform.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          APPIMAGE=$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)
+          DEB=$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1)
+          RPM=$(ls src-tauri/target/release/bundle/rpm/*.rpm 2>/dev/null | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            cp "$APPIMAGE" VidMinder-linux.AppImage
+            gh release upload "$TAG" VidMinder-linux.AppImage --clobber
+          fi
+          if [ -n "$DEB" ]; then
+            cp "$DEB" VidMinder-linux.deb
+            gh release upload "$TAG" VidMinder-linux.deb --clobber
+          fi
+          if [ -n "$RPM" ]; then
+            cp "$RPM" VidMinder-linux.rpm
+            gh release upload "$TAG" VidMinder-linux.rpm --clobber
+          fi
+
       - name: Upload Windows installer artifact
         if: matrix.platform.runner == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4

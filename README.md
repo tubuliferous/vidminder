@@ -7,14 +7,13 @@ An elegant, lightweight desktop app for collecting YouTube videos into a calm po
 
 ## Download
 
-Grab the latest installer for your platform from the **[latest release](https://github.com/tubuliferous/vidminder/releases/latest)** page:
-
-| Platform | File |
+| Platform | Download |
 | --- | --- |
-| Windows | `*_x64-setup.exe` (NSIS) or `*_x64_en-US.msi` |
-| macOS (Apple Silicon) | `VidMinder_*_aarch64-apple-darwin.app.zip` |
-| macOS (Intel) | `VidMinder_*_x86_64-apple-darwin.app.zip` |
-| Linux | `*.AppImage` or `*.deb` |
+| **Windows** | [Installer (.exe)](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-windows-setup.exe) · [MSI](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-windows.msi) |
+| **macOS (Apple Silicon)** | [`.app.zip`](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-macos-arm64.app.zip) |
+| **Linux** | [AppImage](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.AppImage) · [.deb](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.deb) · [.rpm](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.rpm) |
+
+All links point to the **latest release** automatically — bookmark them and they'll keep working as new versions ship. Browse every version at the [releases page](https://github.com/tubuliferous/vidminder/releases).
 
 > **Windows users**: The installer is unsigned, so SmartScreen will show a warning. Click *More info → Run anyway*.
 
