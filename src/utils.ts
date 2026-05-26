@@ -80,23 +80,74 @@ export function isYouTubeUrl(raw: string): boolean {
   }
 }
 
-export type RecencyBucket = "today" | "thisWeek" | "thisMonth" | "older";
+/// Coerce whatever the user typed into a canonical YouTube URL we can hand to
+/// yt-dlp. Accepts:
+///   - Full URLs (https://youtube.com/..., http://youtu.be/..., etc.)
+///   - URLs missing the scheme (youtube.com/@name, youtu.be/abc)
+///   - YouTube channel @handles (@SomeChannel or SomeChannel)
+///   - Raw channel IDs (UCxxxxxxxxxxxxxxxxxxxxx)
+/// Returns null if we can't make a YouTube URL out of it.
+export function normalizeYouTubeInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // Already a full URL — keep if it's YouTube.
+  if (/^https?:\/\//i.test(trimmed)) {
+    return isYouTubeUrl(trimmed) ? trimmed : null;
+  }
+
+  // Scheme-less URL (e.g. "youtube.com/@x", "youtu.be/abc")
+  if (
+    /^(www\.|m\.|music\.)?youtube\.com\//i.test(trimmed) ||
+    /^youtu\.be\//i.test(trimmed)
+  ) {
+    return "https://" + trimmed;
+  }
+
+  // @handle ("@HeatherCoxRichardson")
+  if (trimmed.startsWith("@")) {
+    const handle = trimmed.slice(1);
+    if (/^[A-Za-z0-9._-]{1,60}$/.test(handle)) {
+      return `https://www.youtube.com/@${handle}`;
+    }
+    return null;
+  }
+
+  // Bare channel ID — strict UC pattern
+  if (/^UC[A-Za-z0-9_-]{22}$/.test(trimmed)) {
+    return `https://www.youtube.com/channel/${trimmed}`;
+  }
+
+  // Bare handle-like string — no spaces, no slashes, no scheme. Treat as a
+  // YouTube @ handle.
+  if (/^[A-Za-z0-9._-]{1,60}$/.test(trimmed)) {
+    return `https://www.youtube.com/@${trimmed}`;
+  }
+
+  return null;
+}
+
+export type RecencyBucket = "today" | "thisWeek" | "lastWeek" | "older";
 
 export const RECENCY_LABELS: Record<RecencyBucket, string> = {
   today: "Today",
   thisWeek: "This week",
-  thisMonth: "This month",
+  lastWeek: "Last week",
   older: "Earlier",
 };
 
-export const RECENCY_ORDER: RecencyBucket[] = ["today", "thisWeek", "thisMonth", "older"];
+export const RECENCY_ORDER: RecencyBucket[] = ["today", "thisWeek", "lastWeek", "older"];
 
 export function recencyBucket(
   uploadDate: string | null,
-  firstSeenAt: number,
+  _firstSeenAt: number,
   uploadTimestamp?: number | null
 ): RecencyBucket {
-  let uploadMs: number;
+  // We deliberately do NOT fall back to first_seen_at — that's when VidMinder
+  // first encountered the video, not when it was actually uploaded. Without a
+  // real upload time we bucket as "older" so unknown-date items don't pollute
+  // the Today / Week / Month buckets.
+  let uploadMs: number | null = null;
   if (uploadTimestamp && uploadTimestamp > 0) {
     uploadMs = uploadTimestamp * 1000;
   } else if (uploadDate && /^\d{8}/.test(uploadDate)) {
@@ -104,15 +155,14 @@ export function recencyBucket(
     const m = +uploadDate.slice(4, 6);
     const d = +uploadDate.slice(6, 8);
     uploadMs = new Date(y, m - 1, d).getTime();
-  } else {
-    uploadMs = firstSeenAt * 1000;
   }
+  if (uploadMs == null) return "older";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const diffDays = Math.floor((today.getTime() - uploadMs) / 86_400_000);
   if (diffDays <= 0) return "today";
   if (diffDays <= 7) return "thisWeek";
-  if (diffDays <= 30) return "thisMonth";
+  if (diffDays <= 14) return "lastWeek";
   return "older";
 }
 

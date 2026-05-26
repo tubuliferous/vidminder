@@ -10,7 +10,9 @@ import * as api from "../api";
 type Props = {
   video: Video;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (e: React.MouseEvent) => void;
+  onMouseDownRow?: (e: React.MouseEvent) => void;
+  onMouseEnterRow?: (e: React.MouseEvent) => void;
   onOpen: () => void;
   onToggleFavorite: () => void;
   onDragStateChange?: (dragging: boolean) => void;
@@ -20,6 +22,8 @@ export function VideoCard({
   video,
   selected,
   onSelect,
+  onMouseDownRow,
+  onMouseEnterRow,
   onOpen,
   onToggleFavorite,
   onDragStateChange,
@@ -37,6 +41,8 @@ export function VideoCard({
       }}
       onDragEnd={() => onDragStateChange?.(false)}
       onClick={onSelect}
+      onMouseDown={onMouseDownRow}
+      onMouseEnter={onMouseEnterRow}
       onDoubleClick={onOpen}
       className={
         "group flex gap-3 px-3 py-2.5 cursor-pointer border-l-2 transition-colors " +

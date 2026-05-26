@@ -26,6 +26,10 @@ export async function unfollowChannel(id: number): Promise<void> {
   await invoke("unfollow_channel", { id });
 }
 
+export async function setChannelCategory(id: number, category: string | null): Promise<void> {
+  await invoke("set_channel_category", { id, category });
+}
+
 export async function listChannels(): Promise<Channel[]> {
   return await invoke<Channel[]>("list_channels");
 }
@@ -42,8 +46,26 @@ export async function undismissInbox(id: number): Promise<void> {
   await invoke("undismiss_inbox", { id });
 }
 
+export async function markInboxSeen(id: number): Promise<void> {
+  await invoke("mark_inbox_seen", { id });
+}
+
+export async function markInboxUnseen(id: number): Promise<void> {
+  await invoke("mark_inbox_unseen", { id });
+}
+
 export async function dismissAllInbox(channelId: number): Promise<void> {
   await invoke("dismiss_all_inbox", { channelId });
+}
+
+/// Bulk dismiss — runs dismissInbox in parallel. Returns the IDs that were
+/// dismissed so the caller can record an undoable batch.
+export async function dismissInboxMany(ids: number[]): Promise<void> {
+  await Promise.all(ids.map((id) => invoke("dismiss_inbox", { id })));
+}
+
+export async function undismissInboxMany(ids: number[]): Promise<void> {
+  await Promise.all(ids.map((id) => invoke("undismiss_inbox", { id })));
 }
 
 export async function addInboxToLibrary(id: number): Promise<Video> {

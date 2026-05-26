@@ -18,6 +18,7 @@ type Props = {
   onDropToFavorites: (videoId: number) => void;
   onDropToWatched: (videoId: number) => void;
   onDropToUnwatched: (videoId: number) => void;
+  onChannelCategoryChange: (channelId: number, category: string | null) => void;
   onOpenSettings: () => void;
 };
 
@@ -269,6 +270,7 @@ export function Sidebar({
   onDropToFavorites,
   onDropToWatched,
   onDropToUnwatched,
+  onChannelCategoryChange,
   onOpenSettings,
 }: Props) {
   const c = counts(videos);
@@ -353,7 +355,7 @@ export function Sidebar({
               </button>
               <button
                 onClick={onFollowClick}
-                className="w-4 h-4 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition flex items-center justify-center"
+                className="w-[18px] h-[18px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
                 title="Follow a channel"
               >
                 <PlusIcon />
@@ -366,14 +368,12 @@ export function Sidebar({
               Click <span className="text-[var(--color-ink-dim)]">+</span> to follow a channel by URL, or use “Follow this channel” on any video.
             </div>
           ) : (
-            channels.map((ch) => (
-              <ChannelRow
-                key={ch.id}
-                channel={ch}
-                active={isActive({ kind: "channel", channelId: ch.id })}
-                onSelect={() => onFilter({ kind: "channel", channelId: ch.id })}
-              />
-            ))
+            <ChannelList
+              channels={channels}
+              isActive={isActive}
+              onFilter={onFilter}
+              onCategoryChange={onChannelCategoryChange}
+            />
           )}
         </Section>
 
@@ -456,19 +456,151 @@ export function Sidebar({
   );
 }
 
+/// Groups channels by their `category` field. If everyone is uncategorized
+/// (the default state for a fresh install), renders flat. Otherwise groups by
+/// category with collapsible sub-sections; uncategorized channels land in an
+/// "Uncategorized" group at the bottom.
+function ChannelList({
+  channels,
+  isActive,
+  onFilter,
+  onCategoryChange,
+}: {
+  channels: Channel[];
+  isActive: (f: Filter) => boolean;
+  onFilter: (f: Filter) => void;
+  onCategoryChange: (channelId: number, category: string | null) => void;
+}) {
+  const allUncategorized = channels.every((c) => !c.category);
+  if (allUncategorized) {
+    return (
+      <>
+        {channels.map((ch) => (
+          <ChannelRow
+            key={ch.id}
+            channel={ch}
+            active={isActive({ kind: "channel", channelId: ch.id })}
+            onSelect={() => onFilter({ kind: "channel", channelId: ch.id })}
+            onCategoryChange={onCategoryChange}
+          />
+        ))}
+      </>
+    );
+  }
+
+  const grouped = new Map<string, Channel[]>();
+  for (const ch of channels) {
+    const key = ch.category && ch.category.trim() ? ch.category.trim() : "";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(ch);
+  }
+  const entries = [...grouped.entries()].sort((a, b) => {
+    // Uncategorized last; otherwise alphabetical.
+    if (a[0] === "" && b[0] !== "") return 1;
+    if (b[0] === "" && a[0] !== "") return -1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  return (
+    <>
+      {entries.map(([cat, chs]) => (
+        <CategoryGroup
+          key={cat || "__uncat__"}
+          title={cat || "Uncategorized"}
+          storageKey={"channel-category-" + (cat || "__uncat__")}
+        >
+          {chs.map((ch) => (
+            <ChannelRow
+              key={ch.id}
+              channel={ch}
+              active={isActive({ kind: "channel", channelId: ch.id })}
+              onSelect={() => onFilter({ kind: "channel", channelId: ch.id })}
+              onCategoryChange={onCategoryChange}
+            />
+          ))}
+        </CategoryGroup>
+      ))}
+    </>
+  );
+}
+
+function CategoryGroup({
+  title,
+  storageKey,
+  children,
+}: {
+  title: string;
+  storageKey: string;
+  children: React.ReactNode;
+}) {
+  const [expanded, toggle] = useCollapsibleSection(storageKey, true);
+  return (
+    <div className="mt-1">
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-1 text-left text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] mx-1.5 px-2 py-[3px] rounded transition-colors group"
+      >
+        <Chevron expanded={expanded} />
+        <span className="font-medium tracking-tight">{title}</span>
+      </button>
+      {expanded && <div className="flex flex-col">{children}</div>}
+    </div>
+  );
+}
+
 function ChannelRow({
   channel,
   active,
   onSelect,
+  onCategoryChange,
 }: {
   channel: Channel;
   active: boolean;
   onSelect: () => void;
+  onCategoryChange: (channelId: number, category: string | null) => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(channel.category ?? "");
+  const beginEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraft(channel.category ?? "");
+    setEditing(true);
+  };
+  const commit = () => {
+    const next = draft.trim() || null;
+    if (next !== (channel.category ?? null)) {
+      onCategoryChange(channel.id, next);
+    }
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(channel.category ?? "");
+    setEditing(false);
+  };
   const openOnYouTube = (e: React.MouseEvent) => {
     e.stopPropagation();
     api.openInBrowser(channel.url);
   };
+
+  if (editing) {
+    return (
+      <div className="mx-1.5 px-2 py-[5px] flex items-center gap-1.5">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") cancel();
+          }}
+          onBlur={commit}
+          placeholder={`Category for ${channel.name}`}
+          className="flex-1 text-[12.5px] px-2 py-[2px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       role="button"
@@ -490,6 +622,17 @@ function ChannelRow({
       <span className="truncate flex-1">{channel.name}</span>
       <span className="flex items-center gap-1.5 shrink-0">
         <button
+          onClick={beginEdit}
+          title={
+            channel.category
+              ? `Category: ${channel.category} — click to edit`
+              : "Set a category"
+          }
+          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
+        >
+          <TagIcon />
+        </button>
+        <button
           onClick={openOnYouTube}
           title={`Open ${channel.name} on YouTube`}
           className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
@@ -503,6 +646,24 @@ function ChannelRow({
         )}
       </span>
     </div>
+  );
+}
+
+function TagIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+      <line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
   );
 }
 
@@ -526,19 +687,20 @@ function ExternalLinkIcon() {
 }
 
 function PlusIcon() {
+  // Filled-rect plus instead of stroked lines — avoids subpixel rounding
+  // mismatches between vertical and horizontal arms that can make a stroked
+  // SVG look visually off-center inside a small flex container.
   return (
     <svg
-      width="9"
-      height="9"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="currentColor"
+      className="block"
+      shapeRendering="crispEdges"
     >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
+      <rect x="4" y="0" width="2" height="10" />
+      <rect x="0" y="4" width="10" height="2" />
     </svg>
   );
 }

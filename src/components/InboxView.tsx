@@ -16,7 +16,9 @@ type Props = {
   onClearSearch: () => void;
   onAdd: (cv: ChannelVideo) => Promise<void> | void;
   onDismiss: (cv: ChannelVideo) => Promise<void> | void;
-  onOpenAndDismiss: (cv: ChannelVideo) => Promise<void> | void;
+  onOpen: (cv: ChannelVideo) => Promise<void> | void;
+  onDismissAll: () => void;
+  dismissingAll: boolean;
   refreshing: boolean;
   onRefresh: () => void;
 };
@@ -24,8 +26,8 @@ type Props = {
 const BUCKET_HINTS: Record<RecencyBucket, string> = {
   today: "Hot off the press — uploaded today.",
   thisWeek: "From the past 7 days.",
-  thisMonth: "From the past month.",
-  older: "Sitting in your inbox for a while — older than a month.",
+  lastWeek: "Days 8–14 ago.",
+  older: "Older than two weeks.",
 };
 
 export function InboxView({
@@ -36,7 +38,9 @@ export function InboxView({
   onClearSearch,
   onAdd,
   onDismiss,
-  onOpenAndDismiss,
+  onOpen,
+  onDismissAll,
+  dismissingAll,
   refreshing,
   onRefresh,
 }: Props) {
@@ -94,28 +98,48 @@ export function InboxView({
               ? `${items.length} match${items.length === 1 ? "" : "es"} of ${totalItems}`
               : items.length === 0
               ? "No new videos right now"
-              : `${newCount} new this month${
+              : `${newCount} new in past 2 weeks${
                   items.length > newCount
                     ? ` · ${items.length - newCount} earlier`
                     : ""
                 }`}
           </div>
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={refreshing}
-          className={
-            "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors flex items-center gap-2 min-w-[112px] justify-center " +
-            (refreshing
-              ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
-              : "text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
-          }
-        >
-          {refreshing && (
-            <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
+        <div className="flex items-center gap-2">
+          {items.length > 0 && (
+            <button
+              onClick={onDismissAll}
+              disabled={dismissingAll}
+              className={
+                "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors inline-flex items-center gap-1.5 min-w-[112px] justify-center " +
+                (dismissingAll
+                  ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
+                  : "text-[var(--color-ink-dim)] hover:text-[var(--color-danger)] hover:border-[var(--color-danger)]/60")
+              }
+              title="Dismiss every item currently in your inbox"
+            >
+              {dismissingAll && (
+                <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-ink-dim)] border-t-transparent animate-spin shrink-0" />
+              )}
+              <span>{dismissingAll ? "Dismissing" : "Dismiss all"}</span>
+            </button>
           )}
-          <span>{refreshing ? "Checking" : "Check now"}</span>
-        </button>
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className={
+              "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors flex items-center gap-2 min-w-[112px] justify-center " +
+              (refreshing
+                ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
+                : "text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+            }
+          >
+            {refreshing && (
+              <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
+            )}
+            <span>{refreshing ? "Checking" : "Check now"}</span>
+          </button>
+        </div>
       </header>
 
       {items.length === 0 ? (
@@ -180,7 +204,7 @@ export function InboxView({
                     busy={busy.has(cv.id)}
                     onAdd={wrap(cv.id, () => onAdd(cv))}
                     onDismiss={wrap(cv.id, () => onDismiss(cv))}
-                    onOpenAndDismiss={() => onOpenAndDismiss(cv)}
+                    onOpen={() => onOpen(cv)}
                   />
                 ))}
               </div>

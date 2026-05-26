@@ -27,6 +27,7 @@ export type Channel = {
   channel_id: string | null;
   name: string;
   thumbnail_url: string | null;
+  category: string | null;
   followed_at: number;
   last_checked_at: number | null;
   inbox_count: number;
@@ -45,6 +46,7 @@ export type ChannelVideo = {
   upload_date: string | null;
   upload_timestamp: number | null;
   first_seen_at: number;
+  seen_at: number | null;
   dismissed: boolean;
   in_library: boolean;
 };

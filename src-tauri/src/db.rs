@@ -37,6 +37,7 @@ pub struct Channel {
     pub channel_id: Option<String>,
     pub name: String,
     pub thumbnail_url: Option<String>,
+    pub category: Option<String>,
     pub followed_at: i64,
     pub last_checked_at: Option<i64>,
     pub inbox_count: i64,
@@ -56,6 +57,7 @@ pub struct ChannelVideo {
     pub upload_date: Option<String>,
     pub upload_timestamp: Option<i64>,
     pub first_seen_at: i64,
+    pub seen_at: Option<i64>,
     pub dismissed: bool,
     pub in_library: bool,
 }
@@ -141,6 +143,21 @@ pub fn open_db() -> Result<Db> {
     add_column_if_missing(&conn, "videos", "channel_id", "TEXT")?;
     add_column_if_missing(&conn, "videos", "favorite", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(&conn, "channel_videos", "upload_timestamp", "INTEGER")?;
+    add_column_if_missing(&conn, "channel_videos", "seen_at", "INTEGER")?;
+    add_column_if_missing(&conn, "channels", "category", "TEXT")?;
+    // One-time wipe: every existing upload_timestamp predates the
+    // "RSS-as-sole-truth" rule and was sourced from yt-dlp's approximate_date
+    // heuristic, which is wildly wrong for older videos. Force RSS to repopulate.
+    let added_verified = add_column_if_missing_returning(
+        &conn,
+        "channel_videos",
+        "timestamp_verified",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    if added_verified {
+        conn.execute("UPDATE channel_videos SET upload_timestamp = NULL", [])
+            .context("wiping pre-RSS upload_timestamps")?;
+    }
     let added_auto_dismissed = add_column_if_missing_returning(
         &conn,
         "channel_videos",
@@ -486,9 +503,13 @@ pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<Channel>> {
     let row = conn
         .query_row(
             r#"SELECT c.id, c.url, c.source, c.channel_id, c.name, c.thumbnail_url,
-                      c.followed_at, c.last_checked_at,
+                      c.category, c.followed_at, c.last_checked_at,
                       (SELECT COUNT(*) FROM channel_videos cv
-                       WHERE cv.channel_id = c.id AND cv.dismissed = 0
+                       WHERE cv.channel_id = c.id
+                         AND cv.dismissed = 0
+                         AND cv.seen_at IS NULL
+                         AND cv.upload_timestamp IS NOT NULL
+                         AND cv.upload_timestamp >= (strftime('%s', 'now') - 14 * 86400)
                          AND cv.url NOT IN (SELECT url FROM videos)) AS inbox_count
                FROM channels c
                WHERE c.id = ?1"#,
@@ -504,11 +525,21 @@ pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<Channel>> {
 }
 
 pub fn list_channels(conn: &Connection) -> Result<Vec<Channel>> {
+    // The badge on each channel row counts items that are:
+    //   - not dismissed
+    //   - not yet seen
+    //   - not already in the library
+    //   - uploaded within the last 30 days (so "Earlier" backlog doesn't bloat
+    //     the badge — older items still appear in the inbox but don't count)
     let mut stmt = conn.prepare(
         r#"SELECT c.id, c.url, c.source, c.channel_id, c.name, c.thumbnail_url,
-                  c.followed_at, c.last_checked_at,
+                  c.category, c.followed_at, c.last_checked_at,
                   (SELECT COUNT(*) FROM channel_videos cv
-                   WHERE cv.channel_id = c.id AND cv.dismissed = 0
+                   WHERE cv.channel_id = c.id
+                     AND cv.dismissed = 0
+                     AND cv.seen_at IS NULL
+                     AND cv.upload_timestamp IS NOT NULL
+                     AND cv.upload_timestamp >= (strftime('%s', 'now') - 14 * 86400)
                      AND cv.url NOT IN (SELECT url FROM videos)) AS inbox_count
            FROM channels c
            ORDER BY c.name COLLATE NOCASE"#,
@@ -529,10 +560,26 @@ fn channel_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
         channel_id: r.get("channel_id")?,
         name: r.get("name")?,
         thumbnail_url: r.get("thumbnail_url")?,
+        category: r.get("category").ok().flatten(),
         followed_at: r.get("followed_at")?,
         last_checked_at: r.get("last_checked_at").ok(),
         inbox_count: r.get("inbox_count").unwrap_or(0),
     })
+}
+
+pub fn set_channel_category(
+    conn: &Connection,
+    channel_id: i64,
+    category: Option<&str>,
+) -> Result<()> {
+    let cleaned = category
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    conn.execute(
+        "UPDATE channels SET category = ?1 WHERE id = ?2",
+        params![cleaned, channel_id],
+    )?;
+    Ok(())
 }
 
 pub fn set_last_checked(conn: &Connection, channel_id: i64, when: i64) -> Result<()> {
@@ -563,6 +610,11 @@ pub struct UpsertResult {
 
 /// Insert a new entry, OR if it already exists, backfill missing timestamp/date
 /// fields without touching the user's dismissed state.
+///
+/// The timestamp written here is treated as *unverified* — it might be a
+/// rough estimate from yt-dlp's approximate_date heuristic. Callers should
+/// follow up with `set_channel_video_timestamp` for entries they've confirmed
+/// with a per-video fetch or RSS lookup, which flips `timestamp_verified=1`.
 pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result<UpsertResult> {
     let now = unix_now();
     let auto_dismissed_flag: i64 = if v.dismissed { 1 } else { 0 };
@@ -570,8 +622,8 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
         r#"INSERT OR IGNORE INTO channel_videos
             (channel_id, video_external_id, url, title, thumbnail_url,
              duration, upload_date, upload_timestamp, first_seen_at,
-             dismissed, auto_dismissed_at_follow)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+             dismissed, auto_dismissed_at_follow, timestamp_verified)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)"#,
         params![
             v.channel_id,
             v.video_external_id,
@@ -593,6 +645,9 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
     // we now have a value. Do NOT change dismissed.
     let mut backfilled = false;
     if v.upload_timestamp.is_some() {
+        // Backfill only when upload_timestamp is NULL; don't mark verified —
+        // this is still the approximate-source path. set_channel_video_timestamp
+        // is the only call that flips timestamp_verified to 1.
         let n = conn.execute(
             r#"UPDATE channel_videos
                SET upload_timestamp = ?1
@@ -619,7 +674,10 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
 /// Un-dismiss entries for a channel that were originally auto-dismissed at
 /// follow time and were uploaded within the given cutoff (Unix seconds).
 /// Returns the number of rows un-dismissed. Anything the user explicitly
-/// dismissed is left alone.
+/// dismissed is left alone. Currently superseded by
+/// `resurface_channel_recent` for the per-channel button; kept for
+/// `catch_up_all_channels` symmetry and future fine-grained use.
+#[allow(dead_code)]
 pub fn catch_up_channel(
     conn: &Connection,
     channel_id: i64,
@@ -654,12 +712,33 @@ pub fn catch_up_all_channels(conn: &Connection, cutoff_unix: i64) -> Result<i64>
     Ok(n as i64)
 }
 
+/// Aggressive resurface — un-dismiss every entry for the channel that's within
+/// the cutoff window, including ones the user explicitly dismissed. Also
+/// clears seen_at so the rows show as fresh again. Used by the per-channel
+/// "Resurface recent" button.
+pub fn resurface_channel_recent(
+    conn: &Connection,
+    channel_id: i64,
+    cutoff_unix: i64,
+) -> Result<i64> {
+    let n = conn.execute(
+        r#"UPDATE channel_videos
+           SET dismissed = 0, auto_dismissed_at_follow = 0, seen_at = NULL
+           WHERE channel_id = ?1
+             AND upload_timestamp IS NOT NULL
+             AND upload_timestamp >= ?2
+             AND url NOT IN (SELECT url FROM videos)"#,
+        params![channel_id, cutoff_unix],
+    )?;
+    Ok(n as i64)
+}
+
 pub fn list_inbox(conn: &Connection) -> Result<Vec<ChannelVideo>> {
     let mut stmt = conn.prepare(
         r#"SELECT cv.id, cv.channel_id, c.name AS channel_name, c.url AS channel_url,
                   cv.video_external_id, cv.url, cv.title, cv.thumbnail_url,
                   cv.duration, cv.upload_date, cv.upload_timestamp,
-                  cv.first_seen_at, cv.dismissed,
+                  cv.first_seen_at, cv.seen_at, cv.dismissed,
                   (cv.url IN (SELECT url FROM videos)) AS in_library
            FROM channel_videos cv
            JOIN channels c ON c.id = cv.channel_id
@@ -701,6 +780,7 @@ fn channel_video_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelVide
         upload_date: r.get("upload_date")?,
         upload_timestamp: r.get("upload_timestamp").ok(),
         first_seen_at: r.get("first_seen_at")?,
+        seen_at: r.get("seen_at").ok().flatten(),
         dismissed: dismissed_i != 0,
         in_library: in_library_i != 0,
     })
@@ -728,9 +808,24 @@ pub fn get_channel_video(conn: &Connection, id: i64) -> Result<Option<ChannelVid
     }
 }
 
-/// Force-update a channel_video's upload_timestamp by (channel, external id).
-/// Used to apply the authoritative timestamps from the YouTube RSS feed over
-/// yt-dlp's approximate values.
+/// Apply an exact, RSS-sourced upload timestamp to a channel_video. Marks
+/// the row as having a verified timestamp so the inbox views can trust it.
+/// Set of `video_external_id` values for this channel where we already have a
+/// verified timestamp. Used by the refresh loop to skip per-video yt-dlp
+/// fetches for entries we've already accurately dated.
+pub fn list_verified_video_ids(
+    conn: &Connection,
+    channel_id: i64,
+) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT video_external_id FROM channel_videos
+         WHERE channel_id = ?1 AND timestamp_verified = 1
+           AND upload_timestamp IS NOT NULL",
+    )?;
+    let rows = stmt.query_map(params![channel_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 pub fn set_channel_video_timestamp(
     conn: &Connection,
     channel_id: i64,
@@ -738,7 +833,8 @@ pub fn set_channel_video_timestamp(
     timestamp: i64,
 ) -> Result<()> {
     conn.execute(
-        "UPDATE channel_videos SET upload_timestamp = ?1
+        "UPDATE channel_videos
+         SET upload_timestamp = ?1, timestamp_verified = 1
          WHERE channel_id = ?2 AND video_external_id = ?3",
         params![timestamp, channel_id, video_external_id],
     )?;
@@ -762,6 +858,22 @@ pub fn undismiss_channel_video(conn: &Connection, id: i64) -> Result<()> {
         "UPDATE channel_videos
          SET dismissed = 0, auto_dismissed_at_follow = 0
          WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
+pub fn mark_channel_video_seen(conn: &Connection, id: i64, when: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE channel_videos SET seen_at = ?1 WHERE id = ?2",
+        params![when, id],
+    )?;
+    Ok(())
+}
+
+pub fn unmark_channel_video_seen(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE channel_videos SET seen_at = NULL WHERE id = ?1",
         params![id],
     )?;
     Ok(())

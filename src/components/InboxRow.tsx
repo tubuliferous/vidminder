@@ -1,5 +1,5 @@
 import type { ChannelVideo } from "../types";
-import { formatDuration, formatUploadDate } from "../utils";
+import { formatDuration, formatUploadDate, recencyBucket } from "../utils";
 import * as api from "../api";
 
 type Props = {
@@ -8,7 +8,7 @@ type Props = {
   showChannelName?: boolean;
   onAdd: () => void;
   onDismiss: () => void;
-  onOpenAndDismiss: () => void;
+  onOpen: () => void;
 };
 
 export function InboxRow({
@@ -17,16 +17,35 @@ export function InboxRow({
   showChannelName = true,
   onAdd,
   onDismiss,
-  onOpenAndDismiss,
+  onOpen,
 }: Props) {
   const dur = formatDuration(cv.duration);
+  const isUnseen = cv.seen_at == null;
+  const isFresh =
+    recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp) !==
+    "older";
+  // Only items that are both recent and unviewed contribute to the inbox count
+  // badge, so that's the same filter for the NEW pill.
+  const showNewBadge = isUnseen && isFresh;
   return (
-    <div className="flex gap-3 p-2.5 rounded-md bg-[var(--color-surface)] border border-[var(--color-line)] hover:border-[var(--color-line-soft)] transition group">
+    <div
+      className={
+        "flex gap-3 p-2.5 rounded-md border transition group " +
+        (showNewBadge
+          ? "bg-[var(--color-surface)] border-[var(--color-line)] hover:border-[var(--color-line-soft)]"
+          : "bg-[var(--color-surface)]/60 border-[var(--color-line)]/50 hover:border-[var(--color-line-soft)]")
+      }
+    >
       <div
-        onDoubleClick={onOpenAndDismiss}
+        onDoubleClick={onOpen}
         className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-[var(--color-surface-2)] cursor-pointer"
-        title="Double-click to play in browser (also dismisses)"
+        title="Double-click to play in browser (marks as seen)"
       >
+        {showNewBadge && (
+          <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[1px] rounded bg-[var(--color-accent)] text-black shadow-sm">
+            New
+          </span>
+        )}
         {cv.thumbnail_url ? (
           <img
             src={cv.thumbnail_url}
@@ -48,8 +67,11 @@ export function InboxRow({
       </div>
       <div className="flex-1 min-w-0 flex flex-col">
         <div
-          className="text-[13.5px] font-medium leading-snug line-clamp-2 cursor-pointer"
-          onDoubleClick={onOpenAndDismiss}
+          className={
+            "text-[13.5px] leading-snug line-clamp-2 cursor-pointer " +
+            (isUnseen ? "font-semibold" : "font-normal text-[var(--color-ink-dim)]")
+          }
+          onDoubleClick={onOpen}
         >
           {cv.title}
         </div>
@@ -87,7 +109,7 @@ export function InboxRow({
             Dismiss
           </button>
           <button
-            onClick={onOpenAndDismiss}
+            onClick={onOpen}
             className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] ml-1 transition"
           >
             play in browser

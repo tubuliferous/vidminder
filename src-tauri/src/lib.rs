@@ -11,8 +11,11 @@ use tokio::sync::Mutex as AsyncMutex;
 
 const REFRESH_INTERVAL_SECS: u64 = 30 * 60;
 const INITIAL_REFRESH_DELAY_SECS: u64 = 8;
-const PER_CHANNEL_MAX_ENTRIES: usize = 20;
-const RECENT_WINDOW_SECS: i64 = 30 * 24 * 60 * 60;
+// Pull deep enough to cover at least the last month for typical channels.
+// High-frequency channels (multiple uploads per day) may still get cut off,
+// but most weekly/monthly channels' full month of uploads fits within 50.
+const PER_CHANNEL_MAX_ENTRIES: usize = 50;
+const RECENT_WINDOW_SECS: i64 = 14 * 24 * 60 * 60;
 
 fn is_recent(timestamp: Option<i64>) -> bool {
     let Some(ts) = timestamp else { return false };
@@ -173,7 +176,10 @@ async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
     let external_id = listing.channel_id.clone().or_else(|| listing.id.clone());
 
     // Replace approximate timestamps with exact ones from YouTube's RSS feed.
-    overlay_rss_timestamps(&mut listing.entries, external_id.as_deref()).await;
+    // (channel_db_id isn't known yet at follow time — fall back to per-video
+    //  fetches without the DB-cache shortcut)
+    let verified_at_follow =
+        enrich_timestamps(&mut listing.entries, external_id.as_deref(), -1, db).await;
 
     let channel_id = {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
@@ -224,6 +230,14 @@ async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
                     dismissed: !is_recent(ts),
                 },
             );
+        }
+        // Promote verified timestamps for the entries we just inserted.
+        for entry in &listing.entries {
+            if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
+                if verified_at_follow.contains(ext_id) {
+                    let _ = db::set_channel_video_timestamp(&conn, channel_id, ext_id, ts);
+                }
+            }
         }
         db::set_last_checked(&conn, channel_id, now_secs())
             .map_err(|e| AppError::Generic(format!("{e:#}")))?;
@@ -300,6 +314,20 @@ fn list_channels(db: State<'_, Db>) -> AppResult<Vec<Channel>> {
 }
 
 #[tauri::command]
+fn set_channel_category(
+    id: i64,
+    category: Option<String>,
+    app: AppHandle,
+    db: State<'_, Db>,
+) -> AppResult<()> {
+    with_conn(&db, |conn| {
+        db::set_channel_category(conn, id, category.as_deref())
+    })?;
+    let _ = app.emit("channels-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
 fn list_inbox(db: State<'_, Db>) -> AppResult<Vec<ChannelVideo>> {
     with_conn(&db, |conn| db::list_inbox(conn))
 }
@@ -314,6 +342,21 @@ fn dismiss_inbox(id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
 #[tauri::command]
 fn undismiss_inbox(id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
     with_conn(&db, |conn| db::undismiss_channel_video(conn, id))?;
+    let _ = app.emit("inbox-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_inbox_seen(id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    let now = now_secs();
+    with_conn(&db, |conn| db::mark_channel_video_seen(conn, id, now))?;
+    let _ = app.emit("inbox-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_inbox_unseen(id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    with_conn(&db, |conn| db::unmark_channel_video_seen(conn, id))?;
     let _ = app.emit("inbox-changed", ());
     Ok(())
 }
@@ -335,14 +378,61 @@ async fn add_inbox_to_library(
         db::get_channel_video(conn, id)?
             .ok_or_else(|| anyhow::anyhow!("inbox entry not found"))
     })?;
-    let v = add_video_inner(&cv.url, &db).await?;
-    // Dismiss the inbox entry once it's in the library — the inbox query
-    // already hides in_library entries, but flipping the flag keeps the
-    // table tidy.
+
+    // Try the normal yt-dlp full fetch first — it brings down description,
+    // category, raw tags, etc. If yt-dlp can't access the video (members-
+    // only, age-restricted, region-locked, deleted, etc.), fall back to
+    // inserting whatever the channel_video row already has: title,
+    // thumbnail, URL, channel link. The user still gets the video into
+    // their library; only the description ends up empty.
+    let v = match add_video_inner(&cv.url, &db).await {
+        Ok(v) => v,
+        Err(_) => add_video_from_channel_video(&cv, &db)?,
+    };
+
     with_conn(&db, |conn| db::dismiss_channel_video(conn, id))?;
     let _ = app.emit("inbox-changed", ());
     let _ = app.emit("videos-changed", ());
     Ok(v)
+}
+
+/// Insert a library video using only what we already know from the
+/// channel_video row — no yt-dlp call. Used when the full-fetch path fails
+/// (members-only, age-restricted, etc.).
+fn add_video_from_channel_video(cv: &db::ChannelVideo, db: &Db) -> AppResult<Video> {
+    let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+    if let Some(existing_id) = db::find_video_by_url(&conn, &cv.url)
+        .map_err(|e| AppError::Generic(format!("{e:#}")))?
+    {
+        return db::get_video(&conn, existing_id)
+            .map_err(|e| AppError::Generic(format!("{e:#}")))?
+            .ok_or_else(|| AppError::Generic("video vanished".into()));
+    }
+    let channel = db::get_channel(&conn, cv.channel_id)
+        .map_err(|e| AppError::Generic(format!("{e:#}")))?
+        .ok_or_else(|| AppError::Generic("channel missing".into()))?;
+    let id = db::insert_video(
+        &conn,
+        NewVideo {
+            url: &cv.url,
+            source: &channel.source,
+            video_id: Some(&cv.video_external_id),
+            title: &cv.title,
+            description: None,
+            thumbnail_url: cv.thumbnail_url.as_deref(),
+            uploader: Some(&channel.name),
+            duration: cv.duration,
+            upload_date: cv.upload_date.as_deref(),
+            category: None,
+            raw_tags: &[],
+            channel_url: Some(&channel.url),
+            channel_id: channel.channel_id.as_deref(),
+        },
+    )
+    .map_err(|e| AppError::Generic(format!("{e:#}")))?;
+    db::get_video(&conn, id)
+        .map_err(|e| AppError::Generic(format!("{e:#}")))?
+        .ok_or_else(|| AppError::Generic("inserted video not found".into()))
 }
 
 #[tauri::command]
@@ -351,29 +441,102 @@ async fn refresh_channels(app: AppHandle) -> AppResult<RefreshSummary> {
     Ok(summary)
 }
 
-/// Replace `entry.timestamp` with the accurate value from YouTube's per-channel
-/// Atom feed, when available. Falls back silently to whatever yt-dlp gave us
-/// if the RSS request fails or the channel isn't a YouTube channel.
-async fn overlay_rss_timestamps(
+/// Pin down accurate upload timestamps for as many entries as possible. The
+/// channel listing already has approximate (sometimes wrong) timestamps from
+/// yt-dlp's flat-playlist `approximate_date` heuristic; this function tries
+/// to upgrade them with exact values from:
+///   1. YouTube's per-channel RSS feed (one request, ~free when it works —
+///      currently 404'ing in 2026)
+///   2. The DB's existing verified entries (no re-fetch needed)
+///   3. Per-video yt-dlp full-info fetches (slow, can fail for members-only
+///      or otherwise-restricted videos)
+///
+/// Returns the set of `video_external_id`s whose timestamps are *verified*
+/// (RSS or per-video). Anything left over retains its approximate timestamp,
+/// which is good enough for recent uploads but possibly wrong for old ones —
+/// we'll keep trying to verify on subsequent refreshes.
+async fn enrich_timestamps(
     entries: &mut [ytdlp::ChannelEntry],
     channel_external_id: Option<&str>,
-) {
-    // Inline note: not a Tauri command; takes &mut references so we adjust
-    // entries in place after the yt-dlp call returns.
-    let Some(channel_id) = channel_external_id else {
-        return;
-    };
-    let dates = match youtube_rss::fetch_video_timestamps(channel_id).await {
-        Ok(map) if !map.is_empty() => map,
-        _ => return,
-    };
-    for entry in entries.iter_mut() {
-        if let Some(id) = entry.id.as_deref() {
-            if let Some(&ts) = dates.get(id) {
-                entry.timestamp = Some(ts);
+    channel_db_id: i64,
+    db: &Db,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let mut verified_now: HashSet<String> = HashSet::new();
+
+    // 1. RSS fast path (cheap, often dead)
+    if let Some(channel_id) = channel_external_id {
+        if let Ok(map) = youtube_rss::fetch_video_timestamps(channel_id).await {
+            for entry in entries.iter_mut() {
+                if let Some(id) = entry.id.as_deref() {
+                    if let Some(&ts) = map.get(id) {
+                        entry.timestamp = Some(ts);
+                        verified_now.insert(id.to_string());
+                    }
+                }
             }
         }
     }
+
+    // 2. DB: which entries are already verified (so we can skip per-video)?
+    let already_verified: HashSet<String> = if channel_db_id > 0 {
+        let conn = match db.0.lock() {
+            Ok(c) => c,
+            Err(_) => return verified_now,
+        };
+        db::list_verified_video_ids(&conn, channel_db_id).unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+
+    // 3. Per-video yt-dlp for entries still not verified.
+    let need_fetch: Vec<(usize, String, String)> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let id = e.id.as_deref()?;
+            if verified_now.contains(id) || already_verified.contains(id) {
+                return None;
+            }
+            let url = e.webpage()?;
+            Some((i, id.to_string(), url))
+        })
+        .collect();
+
+    if need_fetch.is_empty() {
+        verified_now.extend(already_verified);
+        return verified_now;
+    }
+
+    const PER_VIDEO_CONCURRENCY: usize = 4;
+    let sem = Arc::new(tokio::sync::Semaphore::new(PER_VIDEO_CONCURRENCY));
+    let mut tasks: tokio::task::JoinSet<(usize, String, Option<i64>)> =
+        tokio::task::JoinSet::new();
+    for (idx, id, url) in need_fetch {
+        let sem = sem.clone();
+        tasks.spawn(async move {
+            let _permit = match sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return (idx, id, None),
+            };
+            let ts = ytdlp::fetch_info(&url)
+                .await
+                .ok()
+                .and_then(|info| info.upload_unix());
+            (idx, id, ts)
+        });
+    }
+    while let Some(res) = tasks.join_next().await {
+        if let Ok((idx, id, Some(ts))) = res {
+            if let Some(entry) = entries.get_mut(idx) {
+                entry.timestamp = Some(ts); // overwrite approximate with exact
+            }
+            verified_now.insert(id);
+        }
+    }
+
+    verified_now.extend(already_verified);
+    verified_now
 }
 
 #[tauri::command]
@@ -396,7 +559,6 @@ async fn catch_up_channel(
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
-    // Look up the channel's external id so we can pull exact dates from RSS.
     let channel_external_id: Option<String> = {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
@@ -404,18 +566,30 @@ async fn catch_up_channel(
             .map_err(|e| AppError::Generic(format!("{e:#}")))?
             .and_then(|c| c.channel_id)
     };
-    overlay_rss_timestamps(&mut listing.entries, channel_external_id.as_deref()).await;
+    let verified_ids = enrich_timestamps(
+        &mut listing.entries,
+        channel_external_id.as_deref(),
+        channel_id,
+        app.state::<Db>().inner(),
+    )
+    .await;
 
     let mut surfaced_now: usize = 0;
     {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
-        // Force-apply RSS timestamps to existing rows (overwrites approximate).
+        // Promote verified timestamps to timestamp_verified=1. Approximate
+        // ones go through the upsert path below without the verified flag.
         for entry in &listing.entries {
             if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
-                let _ = db::set_channel_video_timestamp(&conn, channel_id, ext_id, ts);
+                if verified_ids.contains(ext_id) {
+                    let _ = db::set_channel_video_timestamp(&conn, channel_id, ext_id, ts);
+                }
             }
         }
+        // Resurface step (aggressive): un-dismiss + un-see every entry in the
+        // last RECENT_WINDOW_SECS for this channel — even ones the user
+        // explicitly dismissed.
         // Backfill timestamps for any entries we already know about.
         for entry in &listing.entries {
             let Some(ext_id) = entry.id.as_deref() else {
@@ -448,7 +622,7 @@ async fn catch_up_channel(
             }
         }
         let cutoff = now_secs() - RECENT_WINDOW_SECS;
-        let resurfaced = db::catch_up_channel(&conn, channel_id, cutoff)
+        let resurfaced = db::resurface_channel_recent(&conn, channel_id, cutoff)
             .map_err(|e| AppError::Generic(format!("{e:#}")))?;
         surfaced_now += resurfaced as usize;
         let _ = db::set_last_checked(&conn, channel_id, now_secs());
@@ -596,33 +770,44 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
     // subprocesses on a user with a giant subscription list.
     const MAX_CONCURRENT: usize = 8;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
-    let mut tasks: tokio::task::JoinSet<(Channel, anyhow::Result<ytdlp::ChannelListing>)> =
-        tokio::task::JoinSet::new();
+    let mut tasks: tokio::task::JoinSet<(
+        Channel,
+        Option<std::collections::HashSet<String>>,
+        anyhow::Result<ytdlp::ChannelListing>,
+    )> = tokio::task::JoinSet::new();
     for ch in channels {
         let sem = semaphore.clone();
+        let handle = app.clone();
         tasks.spawn(async move {
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
-                Err(_) => return (ch, Err(anyhow::anyhow!("semaphore closed"))),
+                Err(_) => return (ch, None, Err(anyhow::anyhow!("semaphore closed"))),
             };
             let url = ch.url.clone();
             let ext_id = ch.channel_id.clone();
+            let ch_id = ch.id;
             let result = ytdlp::fetch_channel_listing(&url, PER_CHANNEL_MAX_ENTRIES).await;
             match result {
                 Ok(mut listing) => {
-                    overlay_rss_timestamps(&mut listing.entries, ext_id.as_deref()).await;
-                    (ch, Ok(listing))
+                    let db = handle.state::<Db>();
+                    let verified =
+                        enrich_timestamps(&mut listing.entries, ext_id.as_deref(), ch_id, db.inner()).await;
+                    (ch, Some(verified), Ok(listing))
                 }
-                Err(e) => (ch, Err(e)),
+                Err(e) => (ch, None, Err(e)),
             }
         });
     }
 
-    let mut completed: Vec<(Channel, anyhow::Result<ytdlp::ChannelListing>)> =
-        Vec::with_capacity(summary.checked);
+    type CompletedTask = (
+        Channel,
+        Option<std::collections::HashSet<String>>,
+        anyhow::Result<ytdlp::ChannelListing>,
+    );
+    let mut completed: Vec<CompletedTask> = Vec::with_capacity(summary.checked);
     while let Some(res) = tasks.join_next().await {
-        if let Ok(pair) = res {
-            completed.push(pair);
+        if let Ok(triple) = res {
+            completed.push(triple);
         }
     }
 
@@ -633,7 +818,7 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
             .0
             .lock()
             .map_err(|e| AppError::Generic(e.to_string()))?;
-        for (ch, listing_result) in completed {
+        for (ch, verified_ids, listing_result) in completed {
             let listing = match listing_result {
                 Ok(l) => l,
                 Err(e) => {
@@ -641,9 +826,15 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
                     continue;
                 }
             };
+            let verified = verified_ids.unwrap_or_default();
+            // Only flip timestamp_verified=1 for entries whose timestamps came
+            // from RSS or per-video fetch. Approximate timestamps go through
+            // the upsert path with verified=0 so we keep trying to verify them.
             for entry in &listing.entries {
                 if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
-                    let _ = db::set_channel_video_timestamp(&conn, ch.id, ext_id, ts);
+                    if verified.contains(ext_id) {
+                        let _ = db::set_channel_video_timestamp(&conn, ch.id, ext_id, ts);
+                    }
                 }
             }
             for entry in &listing.entries {
@@ -724,9 +915,12 @@ pub fn run() {
             follow_channel,
             unfollow_channel,
             list_channels,
+            set_channel_category,
             list_inbox,
             dismiss_inbox,
             undismiss_inbox,
+            mark_inbox_seen,
+            mark_inbox_unseen,
             dismiss_all_inbox,
             add_inbox_to_library,
             refresh_channels,

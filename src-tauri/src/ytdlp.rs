@@ -59,6 +59,9 @@ pub struct YtdlpInfo {
     pub uploader_url: Option<String>,
     pub duration: Option<f64>,
     pub upload_date: Option<String>,
+    /// Unix-epoch seconds. Returned by yt-dlp's full info dump for most
+    /// extractors. Authoritative when present.
+    pub timestamp: Option<i64>,
     pub categories: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
     pub extractor_key: Option<String>,
@@ -117,6 +120,62 @@ impl YtdlpInfo {
             .or_else(|| self.extractor.clone())
             .unwrap_or_else(|| "Unknown".to_string())
     }
+
+    /// Resolve a Unix-second timestamp from whatever yt-dlp gave us — the
+    /// dedicated `timestamp` field if present, otherwise `upload_date` (UTC
+    /// midnight). Returns None if both are missing/invalid.
+    pub fn upload_unix(&self) -> Option<i64> {
+        if let Some(ts) = self.timestamp {
+            if ts > 0 {
+                return Some(ts);
+            }
+        }
+        yyyymmdd_to_unix(self.upload_date.as_deref()?)
+    }
+}
+
+/// YYYYMMDD (yt-dlp's upload_date format) → Unix seconds at 00:00 UTC.
+pub fn yyyymmdd_to_unix(date: &str) -> Option<i64> {
+    if date.len() < 8 {
+        return None;
+    }
+    let y: i64 = date.get(0..4)?.parse().ok()?;
+    let m: i64 = date.get(4..6)?.parse().ok()?;
+    let d: i64 = date.get(6..8)?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y < 1970 {
+        return None;
+    }
+    let mut days: i64 = 0;
+    for yr in 1970..y {
+        days += if is_leap_year(yr) { 366 } else { 365 };
+    }
+    let dim = days_in_month(y);
+    for mi in 0..(m as usize - 1) {
+        days += dim[mi] as i64;
+    }
+    days += d - 1;
+    Some(days * 86_400)
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn days_in_month(y: i64) -> [i64; 12] {
+    [
+        31,
+        if is_leap_year(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ]
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +323,16 @@ pub async fn fetch_info(url: &str) -> Result<YtdlpInfo> {
 }
 
 pub async fn fetch_channel_listing(url: &str, max_entries: usize) -> Result<ChannelListing> {
+    // Use yt-dlp's /videos tab and trust its natural reverse-chronological
+    // ordering. An earlier multi-tab merge (videos + streams + shorts) re-
+    // sorted by yt-dlp's approximate_date timestamps; those are unreliable
+    // enough that legitimate /videos entries got out-ordered and dropped
+    // from the truncated result — coverage regressed since v0.1.0 because
+    // of that re-sort, not because of missing tabs. Keep it simple.
+    fetch_single_tab(url, max_entries).await
+}
+
+async fn fetch_single_tab(url: &str, max_entries: usize) -> Result<ChannelListing> {
     let url = normalize_channel_url(url);
     let output = yt_dlp_command()
         .args([
@@ -271,9 +340,6 @@ pub async fn fetch_channel_listing(url: &str, max_entries: usize) -> Result<Chan
             "--flat-playlist",
             "--no-warnings",
             "--skip-download",
-            // YouTube's flat-playlist mode normally omits upload dates entirely.
-            // approximate_date asks the extractor to estimate them without
-            // per-video lookups, giving us a `timestamp` field per entry.
             "--extractor-args",
             "youtubetab:approximate_date",
             "--playlist-end",
@@ -299,6 +365,7 @@ pub async fn fetch_channel_listing(url: &str, max_entries: usize) -> Result<Chan
         .with_context(|| "parsing yt-dlp channel JSON output")?;
     Ok(info)
 }
+
 
 /// For YouTube channel URLs, append `/videos` to restrict to the videos tab.
 /// Otherwise leave the URL alone.

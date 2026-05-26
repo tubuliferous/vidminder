@@ -12,13 +12,15 @@ import type {
 import { Sidebar } from "./components/Sidebar";
 import { VideoCard } from "./components/VideoCard";
 import { VideoDetails } from "./components/VideoDetails";
+import { MultiVideoDetails } from "./components/MultiVideoDetails";
 import { InboxView } from "./components/InboxView";
 import { InboxRow } from "./components/InboxRow";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { SearchPalette } from "./components/SearchPalette";
 import {
   DRAG_MIME,
   extractUrlFromDrop,
-  isYouTubeUrl,
+  normalizeYouTubeInput,
   recencyBucket,
   RECENCY_LABELS,
   RECENCY_ORDER,
@@ -49,7 +51,14 @@ function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [inbox, setInbox] = useState<ChannelVideo[]>([]);
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Multi-select. selectedIds carries the full selection; anchorId is the
+  // pivot for shift-click range selects. Treat single selection as a set of
+  // size 1 — the rest of the code branches on selectedIds.size.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [anchorId, setAnchorId] = useState<number | null>(null);
+  // While the user is shift+mousedown-dragging through the list, this holds
+  // the row they started on so each newly-entered row extends the range.
+  const dragRangeAnchor = useRef<number | null>(null);
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -60,7 +69,12 @@ function App() {
   const [followInput, setFollowInput] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
+  // Per-action in-flight trackers — keep buttons disabled and showing
+  // progress until the underlying async work resolves.
+  const [resurfacingChannelId, setResurfacingChannelId] = useState<number | null>(null);
+  const [bulkDismissingScope, setBulkDismissingScope] = useState<string | null>(null);
   const [settings, updateSettings] = useSettings();
 
   const dragDepth = useRef(0);
@@ -218,7 +232,23 @@ function App() {
 
   const removeVideoLocally = useCallback((id: number) => {
     setVideos((prev) => prev.filter((v) => v.id !== id));
-    setSelectedId((cur) => (cur === id ? null : cur));
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setAnchorId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  const selectSingle = useCallback((id: number) => {
+    setSelectedIds(new Set([id]));
+    setAnchorId(id);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setAnchorId(null);
   }, []);
 
   const handleIngestResult = useCallback(
@@ -235,7 +265,7 @@ function App() {
           }
         }
         insertVideoLocally(v);
-        setSelectedId(v.id);
+        selectSingle(v.id);
         if (filter.kind === "inbox") setFilter({ kind: "all" });
         recordUndo(`Added “${v.title.slice(0, 50)}”`, async () => {
           await api.deleteVideo(v.id);
@@ -267,12 +297,13 @@ function App() {
 
   const ingest = useCallback(
     async (rawUrl: string, opts?: { explicitChannel?: boolean }) => {
-      const url = rawUrl.trim();
-      if (!url) return;
-      if (!isYouTubeUrl(url)) {
+      const trimmed = rawUrl.trim();
+      if (!trimmed) return;
+      const url = normalizeYouTubeInput(trimmed);
+      if (!url) {
         pushToast({
           kind: "err",
-          text: "Only YouTube URLs are supported right now",
+          text: `Couldn't interpret "${trimmed.slice(0, 40)}" as a YouTube URL, @handle, or channel ID`,
         });
         return;
       }
@@ -299,17 +330,283 @@ function App() {
         await api.deleteVideo(target.id);
       } catch (e) {
         insertVideoLocally(target);
-        setSelectedId(target.id);
+        selectSingle(target.id);
         pushToast({ kind: "err", text: `Couldn't remove: ${e}` });
         return;
       }
       recordUndo(`Removed “${target.title.slice(0, 50)}”`, async () => {
         const restored = await api.restoreVideo(target);
         insertVideoLocally(restored);
-        setSelectedId(restored.id);
+        selectSingle(restored.id);
       });
     },
-    [insertVideoLocally, pushToast, recordUndo, removeVideoLocally]
+    [insertVideoLocally, pushToast, recordUndo, removeVideoLocally, selectSingle]
+  );
+
+  // -----------------------------------------------------------------------
+  // Bulk mutations for multi-select edits. Each builds a snapshot of prior
+  // state so undo can restore the per-video values (not just the group state).
+  // -----------------------------------------------------------------------
+
+  const handleSetWatchedMany = useCallback(
+    async (videosArr: Video[], watched: boolean) => {
+      if (videosArr.length === 0) return;
+      const snapshot = videosArr.map((v) => ({ id: v.id, prev: v.watched }));
+      const toUpdate = videosArr.filter((v) => v.watched !== watched);
+      if (toUpdate.length === 0) return;
+      const idSet = new Set(snapshot.map((s) => s.id));
+      setVideos((prev) =>
+        prev.map((v) => (idSet.has(v.id) ? { ...v, watched } : v))
+      );
+      try {
+        await Promise.all(toUpdate.map((v) => api.setWatched(v.id, watched)));
+      } catch (e) {
+        // Roll back
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, watched: s.prev } : v;
+          })
+        );
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      const label = watched
+        ? `Marked ${toUpdate.length} watched`
+        : `Unmarked ${toUpdate.length} watched`;
+      recordUndo(label, async () => {
+        await Promise.all(snapshot.map((s) => api.setWatched(s.id, s.prev)));
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, watched: s.prev } : v;
+          })
+        );
+      });
+    },
+    [pushToast, recordUndo]
+  );
+
+  const handleSetFavoriteMany = useCallback(
+    async (videosArr: Video[], favorite: boolean) => {
+      if (videosArr.length === 0) return;
+      const snapshot = videosArr.map((v) => ({ id: v.id, prev: v.favorite }));
+      const toUpdate = videosArr.filter((v) => v.favorite !== favorite);
+      if (toUpdate.length === 0) return;
+      const idSet = new Set(snapshot.map((s) => s.id));
+      setVideos((prev) =>
+        prev.map((v) => (idSet.has(v.id) ? { ...v, favorite } : v))
+      );
+      try {
+        await Promise.all(toUpdate.map((v) => api.setFavorite(v.id, favorite)));
+      } catch (e) {
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, favorite: s.prev } : v;
+          })
+        );
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      const label = favorite
+        ? `Favorited ${toUpdate.length}`
+        : `Unfavorited ${toUpdate.length}`;
+      recordUndo(label, async () => {
+        await Promise.all(snapshot.map((s) => api.setFavorite(s.id, s.prev)));
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, favorite: s.prev } : v;
+          })
+        );
+      });
+    },
+    [pushToast, recordUndo]
+  );
+
+  const handleSetFolderMany = useCallback(
+    async (videosArr: Video[], folder: string | null) => {
+      if (videosArr.length === 0) return;
+      const snapshot = videosArr.map((v) => ({ id: v.id, prev: v.folder }));
+      const toUpdate = videosArr.filter((v) => (v.folder ?? null) !== folder);
+      if (toUpdate.length === 0) return;
+      const idSet = new Set(snapshot.map((s) => s.id));
+      setVideos((prev) =>
+        prev.map((v) => (idSet.has(v.id) ? { ...v, folder } : v))
+      );
+      try {
+        await Promise.all(toUpdate.map((v) => api.setFolder(v.id, folder)));
+      } catch (e) {
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, folder: s.prev } : v;
+          })
+        );
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      const label = folder
+        ? `Set ${toUpdate.length} to folder “${folder}”`
+        : `Cleared folder on ${toUpdate.length}`;
+      recordUndo(label, async () => {
+        await Promise.all(snapshot.map((s) => api.setFolder(s.id, s.prev)));
+        setVideos((prev) =>
+          prev.map((v) => {
+            const s = snapshot.find((s) => s.id === v.id);
+            return s ? { ...v, folder: s.prev } : v;
+          })
+        );
+      });
+    },
+    [pushToast, recordUndo]
+  );
+
+  const handleAddTagMany = useCallback(
+    async (videosArr: Video[], tag: string) => {
+      const cleaned = tag.trim();
+      if (!cleaned || videosArr.length === 0) return;
+      const lc = cleaned.toLowerCase();
+      const targets = videosArr.filter(
+        (v) => !v.user_tags.some((t) => t.toLowerCase() === lc)
+      );
+      if (targets.length === 0) return;
+      let updates: { id: number; tags: string[] }[];
+      try {
+        updates = await Promise.all(
+          targets.map(async (v) => ({
+            id: v.id,
+            tags: await api.addTag(v.id, cleaned),
+          }))
+        );
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      setVideos((prev) =>
+        prev.map((v) => {
+          const u = updates.find((x) => x.id === v.id);
+          return u ? { ...v, user_tags: u.tags } : v;
+        })
+      );
+      recordUndo(`Tagged ${targets.length} with #${cleaned}`, async () => {
+        const back = await Promise.all(
+          targets.map(async (v) => ({
+            id: v.id,
+            tags: await api.removeTag(v.id, cleaned),
+          }))
+        );
+        setVideos((prev) =>
+          prev.map((v) => {
+            const b = back.find((x) => x.id === v.id);
+            return b ? { ...v, user_tags: b.tags } : v;
+          })
+        );
+      });
+    },
+    [pushToast, recordUndo]
+  );
+
+  const handleRemoveTagMany = useCallback(
+    async (videosArr: Video[], tag: string) => {
+      const lc = tag.toLowerCase();
+      const targets = videosArr.filter((v) =>
+        v.user_tags.some((t) => t.toLowerCase() === lc)
+      );
+      if (targets.length === 0) return;
+      let updates: { id: number; tags: string[] }[];
+      try {
+        updates = await Promise.all(
+          targets.map(async (v) => ({
+            id: v.id,
+            tags: await api.removeTag(v.id, tag),
+          }))
+        );
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      setVideos((prev) =>
+        prev.map((v) => {
+          const u = updates.find((x) => x.id === v.id);
+          return u ? { ...v, user_tags: u.tags } : v;
+        })
+      );
+      recordUndo(`Removed #${tag} from ${targets.length}`, async () => {
+        const back = await Promise.all(
+          targets.map(async (v) => ({
+            id: v.id,
+            tags: await api.addTag(v.id, tag),
+          }))
+        );
+        setVideos((prev) =>
+          prev.map((v) => {
+            const b = back.find((x) => x.id === v.id);
+            return b ? { ...v, user_tags: b.tags } : v;
+          })
+        );
+      });
+    },
+    [pushToast, recordUndo]
+  );
+
+  const handleDeleteVideos = useCallback(
+    async (targets: Video[]) => {
+      if (targets.length === 0) return;
+      if (targets.length === 1) {
+        await handleDeleteVideo(targets[0]);
+        return;
+      }
+      // Snapshot so we can restore the whole batch on undo.
+      const snapshots = targets.map((v) => ({ ...v }));
+      // Optimistic UI: remove everything immediately.
+      setVideos((prev) => {
+        const ids = new Set(snapshots.map((v) => v.id));
+        return prev.filter((v) => !ids.has(v.id));
+      });
+      clearSelection();
+      // Fire delete calls in parallel.
+      const results = await Promise.allSettled(
+        snapshots.map((v) => api.deleteVideo(v.id))
+      );
+      const failed: Video[] = [];
+      results.forEach((r, i) => {
+        if (r.status === "rejected") failed.push(snapshots[i]);
+      });
+      if (failed.length > 0) {
+        // Restore optimistic-removed videos that failed to delete.
+        setVideos((prev) => {
+          const next = [...prev, ...failed];
+          next.sort((a, b) => b.added_at - a.added_at);
+          return next;
+        });
+        pushToast({
+          kind: "err",
+          text: `Couldn't remove ${failed.length} of ${snapshots.length}`,
+        });
+      }
+      const successfullyDeleted = snapshots.filter(
+        (_, i) => results[i].status === "fulfilled"
+      );
+      if (successfullyDeleted.length > 0) {
+        recordUndo(
+          `Removed ${successfullyDeleted.length} videos`,
+          async () => {
+            const restored = await Promise.all(
+              successfullyDeleted.map((v) => api.restoreVideo(v))
+            );
+            setVideos((prev) => {
+              const next = [...prev, ...restored];
+              next.sort((a, b) => b.added_at - a.added_at);
+              return next;
+            });
+            setSelectedIds(new Set(restored.map((r) => r.id)));
+          }
+        );
+      }
+    },
+    [clearSelection, handleDeleteVideo, pushToast, recordUndo]
   );
 
   const handleToggleWatched = useCallback(
@@ -506,13 +803,30 @@ function App() {
 
   const handleAddFromInbox = useCallback(
     async (cv: ChannelVideo) => {
+      // Optimistically remove the row from the inbox view immediately — the
+      // `in_library` filter (`!cv.in_library && !cv.dismissed`) makes it
+      // disappear without waiting for the yt-dlp full-fetch to come back.
+      setInbox((prev) =>
+        prev.map((it) => (it.id === cv.id ? { ...it, in_library: true } : it))
+      );
+      // Show a "Fetching …" tracker at the top of the library list so the
+      // user can see the add is in progress.
+      const pendId = crypto.randomUUID();
+      setPending((p) => [...p, { id: pendId, url: cv.url }]);
+
       let added: Video;
       try {
         added = await api.addInboxToLibrary(cv.id);
       } catch (e) {
+        // Roll back the optimistic inbox hide.
+        setInbox((prev) =>
+          prev.map((it) => (it.id === cv.id ? { ...it, in_library: false } : it))
+        );
+        setPending((p) => p.filter((x) => x.id !== pendId));
         pushToast({ kind: "err", text: String(e) });
         return;
       }
+
       if (settings.autoFavorite && !added.favorite) {
         try {
           await api.setFavorite(added.id, true);
@@ -522,9 +836,7 @@ function App() {
         }
       }
       insertVideoLocally(added);
-      setInbox((prev) =>
-        prev.map((it) => (it.id === cv.id ? { ...it, in_library: true } : it))
-      );
+      setPending((p) => p.filter((x) => x.id !== pendId));
       refreshChannelsList();
       recordUndo(`Added “${added.title.slice(0, 50)}” to list`, async () => {
         await api.deleteVideo(added.id);
@@ -564,13 +876,34 @@ function App() {
     [pushToast, recordUndo, refreshChannelsList]
   );
 
-  const handleOpenAndDismissInbox = useCallback(
+  const handleOpenInboxItem = useCallback(
     async (cv: ChannelVideo) => {
       api.openVideoInBrowser(cv.url);
-      // Reuse the undoable dismiss flow so ⌘Z brings it back to the inbox.
-      await handleDismissInboxItem(cv);
+      // The item stays in the inbox — we just mark it as viewed so the NEW
+      // badge clears and the sidebar counts decrement. User still has the
+      // explicit Add / Dismiss choices.
+      if (cv.seen_at != null) return; // already seen
+      try {
+        await api.markInboxSeen(cv.id);
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      setInbox((prev) =>
+        prev.map((it) =>
+          it.id === cv.id ? { ...it, seen_at: Math.floor(Date.now() / 1000) } : it
+        )
+      );
+      refreshChannelsList();
+      recordUndo(`Marked “${cv.title.slice(0, 50)}” unviewed`, async () => {
+        await api.markInboxUnseen(cv.id);
+        setInbox((prev) =>
+          prev.map((it) => (it.id === cv.id ? { ...it, seen_at: null } : it))
+        );
+        refreshChannelsList();
+      });
     },
-    [handleDismissInboxItem]
+    [pushToast, recordUndo, refreshChannelsList]
   );
 
   // ---------------------------------------------------------------------------
@@ -646,10 +979,91 @@ function App() {
     return () => window.removeEventListener("paste", onPaste);
   }, [ingest]);
 
-  const selectedVideo = useMemo(
-    () => videos.find((v) => v.id === selectedId) ?? null,
-    [videos, selectedId]
+  const selectedVideos = useMemo(
+    () => videos.filter((v) => selectedIds.has(v.id)),
+    [videos, selectedIds]
   );
+  const selectedVideo = selectedVideos.length === 1 ? selectedVideos[0] : null;
+
+  // Decide what a row click does based on modifier keys. `orderedIds` is the
+  // current visible ordering (matters for shift-click range selects).
+  const handleVideoSelect = useCallback(
+    (
+      video: Video,
+      e: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+      orderedIds: number[]
+    ) => {
+      if (e.shiftKey && anchorId !== null) {
+        const aIdx = orderedIds.indexOf(anchorId);
+        const bIdx = orderedIds.indexOf(video.id);
+        if (aIdx >= 0 && bIdx >= 0) {
+          const [s, t] = aIdx < bIdx ? [aIdx, bIdx] : [bIdx, aIdx];
+          setSelectedIds(new Set(orderedIds.slice(s, t + 1)));
+          // Don't move anchor — keeps shift-clicking around the same pivot.
+        }
+        return;
+      }
+      if (e.metaKey || e.ctrlKey) {
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(video.id)) next.delete(video.id);
+          else next.add(video.id);
+          return next;
+        });
+        setAnchorId(video.id);
+        return;
+      }
+      selectSingle(video.id);
+    },
+    [anchorId, selectSingle]
+  );
+
+  // Shift-drag selection: on shift+mousedown we mark a drag anchor, and as the
+  // pointer enters subsequent rows (with the button still pressed) we extend
+  // the range from the drag anchor to that row.
+  const handleVideoMouseDown = useCallback(
+    (video: Video, e: React.MouseEvent, orderedIds: number[]) => {
+      if (!e.shiftKey) return;
+      if (e.button !== 0) return;
+      // Don't preventDefault — we still want the click handler to fire on mouseup.
+      dragRangeAnchor.current = anchorId ?? video.id;
+      if (anchorId == null) {
+        setAnchorId(video.id);
+      }
+      // Seed the range so the very first row is selected immediately.
+      const aIdx = orderedIds.indexOf(dragRangeAnchor.current);
+      const bIdx = orderedIds.indexOf(video.id);
+      if (aIdx >= 0 && bIdx >= 0) {
+        const [s, t] = aIdx < bIdx ? [aIdx, bIdx] : [bIdx, aIdx];
+        setSelectedIds(new Set(orderedIds.slice(s, t + 1)));
+      }
+    },
+    [anchorId]
+  );
+
+  const handleVideoMouseEnter = useCallback(
+    (video: Video, e: React.MouseEvent, orderedIds: number[]) => {
+      if (dragRangeAnchor.current == null) return;
+      if ((e.buttons & 1) === 0) {
+        dragRangeAnchor.current = null;
+        return;
+      }
+      const aIdx = orderedIds.indexOf(dragRangeAnchor.current);
+      const bIdx = orderedIds.indexOf(video.id);
+      if (aIdx < 0 || bIdx < 0) return;
+      const [s, t] = aIdx < bIdx ? [aIdx, bIdx] : [bIdx, aIdx];
+      setSelectedIds(new Set(orderedIds.slice(s, t + 1)));
+    },
+    []
+  );
+
+  useEffect(() => {
+    const onUp = () => {
+      dragRangeAnchor.current = null;
+    };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -666,6 +1080,12 @@ function App() {
       if (meta && e.key === ",") {
         e.preventDefault();
         setSettingsOpen((cur) => !cur);
+        return;
+      }
+
+      if (meta && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setSearchOpen(true);
         return;
       }
 
@@ -702,14 +1122,25 @@ function App() {
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (e.metaKey || e.ctrlKey || e.altKey || inField) return;
-        if (!selectedVideo) return;
+        if (selectedVideos.length === 0) return;
         e.preventDefault();
-        handleDeleteVideo(selectedVideo);
+        handleDeleteVideos(selectedVideos);
+      }
+
+      if (e.key === "Escape" && !inField && selectedIds.size > 0) {
+        e.preventDefault();
+        clearSelection();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleDeleteVideo, selectedVideo, undoLast]);
+  }, [
+    clearSelection,
+    handleDeleteVideos,
+    selectedIds,
+    selectedVideos,
+    undoLast,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Derived state
@@ -827,13 +1258,16 @@ function App() {
     }
   };
 
-  // The sidebar badge counts items released within the last month.
+  // The sidebar badge counts items that are unseen, recent, and actionable.
+  // Matches the SQL in `db::list_channels.inbox_count` so the per-channel
+  // badges and the top-level inbox badge agree.
   const inboxCount = useMemo(
     () =>
       visibleInboxItems.filter(
         (cv) =>
+          cv.seen_at == null &&
           recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp) !==
-          "older"
+            "older"
       ).length,
     [visibleInboxItems]
   );
@@ -847,32 +1281,79 @@ function App() {
   // Top-of-app handlers
   // ---------------------------------------------------------------------------
 
-  const handleCatchUp = useCallback(
+  const handleResurfaceChannel = useCallback(
     async (channelId: number) => {
       const ch = channels.find((c) => c.id === channelId);
       if (!ch) return;
+      if (resurfacingChannelId !== null) return; // guard against re-entry
+      setResurfacingChannelId(channelId);
+      const start = Date.now();
       try {
         const summary = await api.catchUpChannel(channelId);
         if (summary.surfaced > 0) {
           pushToast({
             kind: "ok",
-            text: `Surfaced ${summary.surfaced} recent ${summary.surfaced === 1 ? "upload" : "uploads"} from ${ch.name} in your inbox`,
+            text: `Resurfaced ${summary.surfaced} ${summary.surfaced === 1 ? "upload" : "uploads"} from ${ch.name}`,
           });
-          // Hop the user to the inbox so they see what landed.
-          setFilter({ kind: "inbox" });
+          // Stay in the current channel view — the user came here to see this
+          // channel's content; resurfaced items now show up in the channel's
+          // "new uploads" sections at the top of the same view.
         } else {
           pushToast({
             kind: "ok",
-            text: `${ch.name} has nothing in the last 30 days`,
+            text: `${ch.name} has nothing in the last 2 weeks`,
           });
         }
         refreshInbox();
         refreshChannelsList();
       } catch (e) {
         pushToast({ kind: "err", text: String(e) });
+      } finally {
+        // Hold the busy state briefly so the button doesn't strobe when the
+        // call returns very quickly.
+        const elapsed = Date.now() - start;
+        const minHoldMs = 450;
+        if (elapsed < minHoldMs) {
+          await new Promise((r) => setTimeout(r, minHoldMs - elapsed));
+        }
+        setResurfacingChannelId(null);
       }
     },
-    [channels, pushToast, refreshChannelsList, refreshInbox]
+    [channels, pushToast, refreshChannelsList, refreshInbox, resurfacingChannelId]
+  );
+
+  const handleDismissManyInbox = useCallback(
+    async (cvs: ChannelVideo[], label: string, scope: string) => {
+      const ids = cvs.map((cv) => cv.id);
+      if (ids.length === 0) return;
+      if (bulkDismissingScope !== null) return;
+      setBulkDismissingScope(scope);
+      const start = Date.now();
+      try {
+        await api.dismissInboxMany(ids);
+        setInbox((prev) =>
+          prev.map((it) => (ids.includes(it.id) ? { ...it, dismissed: true } : it))
+        );
+        refreshChannelsList();
+        recordUndo(`Dismissed ${ids.length} from ${label}`, async () => {
+          await api.undismissInboxMany(ids);
+          setInbox((prev) =>
+            prev.map((it) => (ids.includes(it.id) ? { ...it, dismissed: false } : it))
+          );
+          refreshChannelsList();
+        });
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+      } finally {
+        const elapsed = Date.now() - start;
+        const minHoldMs = 450;
+        if (elapsed < minHoldMs) {
+          await new Promise((r) => setTimeout(r, minHoldMs - elapsed));
+        }
+        setBulkDismissingScope(null);
+      }
+    },
+    [bulkDismissingScope, pushToast, recordUndo, refreshChannelsList]
   );
 
   const handleRefresh = async () => {
@@ -967,6 +1448,34 @@ function App() {
             const v = videos.find((x) => x.id === id);
             if (v && v.watched) handleToggleWatched(v);
           }}
+          onChannelCategoryChange={async (channelId, category) => {
+            const before = channels.find((c) => c.id === channelId)?.category ?? null;
+            if (before === category) return;
+            try {
+              await api.setChannelCategory(channelId, category);
+            } catch (e) {
+              pushToast({ kind: "err", text: `Couldn't update category: ${e}` });
+              return;
+            }
+            setChannels((prev) =>
+              prev
+                .map((c) => (c.id === channelId ? { ...c, category } : c))
+                .sort((a, b) => a.name.localeCompare(b.name))
+            );
+            recordUndo(
+              category
+                ? `Categorised channel as “${category}”`
+                : "Cleared channel category",
+              async () => {
+                await api.setChannelCategory(channelId, before);
+                setChannels((prev) =>
+                  prev
+                    .map((c) => (c.id === channelId ? { ...c, category: before } : c))
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                );
+              }
+            );
+          }}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -984,7 +1493,7 @@ function App() {
               className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
             />
             <div className="text-[11.5px] text-[var(--color-ink-faint)] hidden md:block">
-              Drop URLs · ⌘V to paste · ⌘Z to undo · Delete to remove
+              ⌘K search · ⌘V paste · ⌘Z undo · Delete remove
             </div>
             <button
               onClick={() => setAddOpen((x) => !x)}
@@ -1008,7 +1517,7 @@ function App() {
                     setAddOpen(false);
                   }
                 }}
-                placeholder="https://www.youtube.com/watch?v=…  or  youtube.com/@SomeChannel to follow"
+                placeholder="Video URL, channel URL, @handle, or channel ID"
                 className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
               />
               <button
@@ -1034,7 +1543,7 @@ function App() {
                     setFollowOpen(false);
                   }
                 }}
-                placeholder="Paste a channel URL — e.g. youtube.com/@SomeChannel"
+                placeholder="Channel URL, @handle, or just a channel name"
                 className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
               />
               <button
@@ -1071,12 +1580,68 @@ function App() {
                 </span>
               </div>
               <button
-                onClick={() => handleCatchUp(currentChannel.id)}
-                className="text-[11.5px] text-[var(--color-accent)] hover:brightness-125 transition"
-                title="Re-check this channel and surface recent uploads (last 30 days) in your inbox"
+                onClick={() => handleResurfaceChannel(currentChannel.id)}
+                disabled={resurfacingChannelId !== null}
+                className={
+                  "text-[11.5px] transition inline-flex items-center gap-1.5 " +
+                  (resurfacingChannelId === currentChannel.id
+                    ? "text-[var(--color-accent)] cursor-default"
+                    : resurfacingChannelId !== null
+                    ? "text-[var(--color-ink-faint)]/40 cursor-not-allowed"
+                    : "text-[var(--color-accent)] hover:brightness-125")
+                }
+                title="Re-check this channel and bring every upload from the last 2 weeks back into the inbox — even ones you dismissed"
               >
-                Catch me up
+                {resurfacingChannelId === currentChannel.id && (
+                  <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" />
+                )}
+                <span>
+                  {resurfacingChannelId === currentChannel.id
+                    ? "Resurfacing…"
+                    : "Resurface recent"}
+                </span>
               </button>
+              {(() => {
+                const channelInbox = inbox.filter(
+                  (cv) =>
+                    cv.channel_id === currentChannel.id &&
+                    !cv.in_library &&
+                    !cv.dismissed
+                );
+                const scope = `channel-${currentChannel.id}`;
+                const busy = bulkDismissingScope === scope;
+                return (
+                  <button
+                    onClick={() => {
+                      if (channelInbox.length === 0) return;
+                      if (
+                        !confirm(
+                          `Dismiss all ${channelInbox.length} new ${channelInbox.length === 1 ? "video" : "videos"} from ${currentChannel.name}?`
+                        )
+                      )
+                        return;
+                      handleDismissManyInbox(channelInbox, currentChannel.name, scope);
+                    }}
+                    disabled={
+                      bulkDismissingScope !== null || channelInbox.length === 0
+                    }
+                    className={
+                      "text-[11.5px] transition inline-flex items-center gap-1.5 " +
+                      (busy
+                        ? "text-[var(--color-ink-dim)] cursor-default"
+                        : bulkDismissingScope !== null || channelInbox.length === 0
+                        ? "text-[var(--color-ink-faint)]/40 cursor-not-allowed"
+                        : "text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]")
+                    }
+                    title="Dismiss every new inbox item from this channel"
+                  >
+                    {busy && (
+                      <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-[var(--color-ink-dim)] border-t-transparent animate-spin" />
+                    )}
+                    <span>{busy ? "Dismissing…" : "Dismiss all"}</span>
+                  </button>
+                );
+              })()}
               <button
                 onClick={() => handleUnfollow(currentChannel.id)}
                 className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
@@ -1111,7 +1676,15 @@ function App() {
                   onClearSearch={() => setSearch("")}
                   onAdd={handleAddFromInbox}
                   onDismiss={handleDismissInboxItem}
-                  onOpenAndDismiss={handleOpenAndDismissInbox}
+                  onOpen={handleOpenInboxItem}
+                  onDismissAll={() => {
+                    const items = visibleInboxItems;
+                    if (items.length === 0) return;
+                    if (!confirm(`Dismiss all ${items.length} ${items.length === 1 ? "item" : "items"} in your inbox?`))
+                      return;
+                    handleDismissManyInbox(items, "inbox", "inbox-global");
+                  }}
+                  dismissingAll={bulkDismissingScope === "inbox-global"}
                   refreshing={refreshing}
                   onRefresh={handleRefresh}
                 />
@@ -1142,7 +1715,7 @@ function App() {
                             showChannelName={false}
                             onAdd={wrapInbox(cv, handleAddFromInbox)}
                             onDismiss={wrapInbox(cv, handleDismissInboxItem)}
-                            onOpenAndDismiss={() => handleOpenAndDismissInbox(cv)}
+                            onOpen={() => handleOpenInboxItem(cv)}
                           />
                         ))}
                       </div>
@@ -1162,11 +1735,19 @@ function App() {
                       </div>
                       <ul className="py-1">
                         {filtered.map((v) => (
-                          <li key={v.id}>
+                          <li key={v.id} id={`video-row-${v.id}`}>
                             <VideoCard
                               video={v}
-                              selected={v.id === selectedId}
-                              onSelect={() => setSelectedId(v.id)}
+                              selected={selectedIds.has(v.id)}
+                              onSelect={(e) =>
+                                handleVideoSelect(v, e, filtered.map((x) => x.id))
+                              }
+                              onMouseDownRow={(e) =>
+                                handleVideoMouseDown(v, e, filtered.map((x) => x.id))
+                              }
+                              onMouseEnterRow={(e) =>
+                                handleVideoMouseEnter(v, e, filtered.map((x) => x.id))
+                              }
                               onOpen={() => handleOpenAndMarkWatched(v)}
                               onToggleFavorite={() => handleToggleFavorite(v)}
                               onDragStateChange={setDraggingVideo}
@@ -1190,11 +1771,19 @@ function App() {
               ) : (
                 <ul className="py-2">
                   {filtered.map((v) => (
-                    <li key={v.id}>
+                    <li key={v.id} id={`video-row-${v.id}`}>
                       <VideoCard
                         video={v}
-                        selected={v.id === selectedId}
-                        onSelect={() => setSelectedId(v.id)}
+                        selected={selectedIds.has(v.id)}
+                        onSelect={(e) =>
+                          handleVideoSelect(v, e, filtered.map((x) => x.id))
+                        }
+                        onMouseDownRow={(e) =>
+                          handleVideoMouseDown(v, e, filtered.map((x) => x.id))
+                        }
+                        onMouseEnterRow={(e) =>
+                          handleVideoMouseEnter(v, e, filtered.map((x) => x.id))
+                        }
                         onOpen={() => handleOpenAndMarkWatched(v)}
                         onToggleFavorite={() => handleToggleFavorite(v)}
                         onDragStateChange={setDraggingVideo}
@@ -1207,7 +1796,21 @@ function App() {
 
             {filter.kind !== "inbox" && (
               <div className="w-[360px] shrink-0 hidden lg:flex">
-                {selectedVideo ? (
+                {selectedVideos.length > 1 ? (
+                  <div className="w-full">
+                    <MultiVideoDetails
+                      videos={selectedVideos}
+                      knownFolders={knownFolders}
+                      onSetWatched={handleSetWatchedMany}
+                      onSetFavorite={handleSetFavoriteMany}
+                      onSetFolder={handleSetFolderMany}
+                      onAddTag={handleAddTagMany}
+                      onRemoveTag={handleRemoveTagMany}
+                      onDeleteAll={handleDeleteVideos}
+                      onClearSelection={clearSelection}
+                    />
+                  </div>
+                ) : selectedVideo ? (
                   <div className="w-full">
                     <VideoDetails
                       video={selectedVideo}
@@ -1225,7 +1828,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="w-full h-full border-l border-[var(--color-line)] bg-[var(--color-surface)] flex items-center justify-center text-[12.5px] text-[var(--color-ink-faint)] px-6 text-center">
-                    Select a video to edit tags, folder, or watched state. ⌘Z undoes any change · Delete removes the highlighted video.
+                    Click a video to edit it. Shift-click to select a range, ⌘-click to toggle individual videos. ⌘Z undoes any change · Delete removes the selection.
                   </div>
                 )}
               </div>
@@ -1250,6 +1853,24 @@ function App() {
         settings={settings}
         onChange={updateSettings}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      <SearchPalette
+        open={searchOpen}
+        videos={videos}
+        onClose={() => setSearchOpen(false)}
+        onPick={(v) => {
+          // Reset filters so the chosen video is visible in the main list,
+          // then select it. A useEffect (below the main render block) scrolls
+          // it into view on the next paint.
+          setSearch("");
+          if (filter.kind === "inbox") setFilter({ kind: "all" });
+          selectSingle(v.id);
+          requestAnimationFrame(() => {
+            const el = document.getElementById(`video-row-${v.id}`);
+            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+          });
+        }}
       />
 
       <div className="absolute bottom-3 right-3 z-40 flex flex-col gap-2 max-w-sm pointer-events-none">
