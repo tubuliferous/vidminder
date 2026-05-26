@@ -43,23 +43,95 @@ function sortByCount(m: Map<string, number>) {
   return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
+const SECTION_STATE_KEY = "vidminder.sidebar.sections.v1";
+
+function loadSectionExpanded(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SECTION_STATE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSectionExpanded(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(SECTION_STATE_KEY, JSON.stringify(state));
+  } catch {
+    /* localStorage can fail in private browsing — ignore */
+  }
+}
+
+function useCollapsibleSection(key: string, defaultExpanded = true): [boolean, () => void] {
+  const [expanded, setExpanded] = useState(() => {
+    const state = loadSectionExpanded();
+    return state[key] ?? defaultExpanded;
+  });
+  const toggle = () => {
+    setExpanded((prev) => {
+      const next = !prev;
+      const state = loadSectionExpanded();
+      state[key] = next;
+      saveSectionExpanded(state);
+      return next;
+    });
+  };
+  return [expanded, toggle];
+}
+
 function Section({
   title,
   trailing,
+  collapsible = true,
+  storageKey,
   children,
 }: {
   title: string;
   trailing?: React.ReactNode;
+  collapsible?: boolean;
+  storageKey?: string;
   children: React.ReactNode;
 }) {
+  const [expanded, toggle] = useCollapsibleSection(storageKey ?? title, true);
+  const showContent = !collapsible || expanded;
   return (
     <div className="mb-5">
       <div className="px-3 mb-1.5 flex items-center justify-between text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)]">
-        <span>{title}</span>
+        {collapsible ? (
+          <button
+            onClick={toggle}
+            className="flex items-center gap-1 hover:text-[var(--color-ink-dim)] transition group"
+            title={expanded ? "Collapse" : "Expand"}
+          >
+            <Chevron expanded={expanded} />
+            <span>{title}</span>
+          </button>
+        ) : (
+          <span>{title}</span>
+        )}
         {trailing}
       </div>
-      <div className="flex flex-col">{children}</div>
+      {showContent && <div className="flex flex-col">{children}</div>}
     </div>
+  );
+}
+
+function Chevron({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={"transition-transform " + (expanded ? "rotate-90" : "")}
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
   );
 }
 
@@ -212,7 +284,7 @@ export function Sidebar({
           <span className="text-[15px] font-semibold tracking-tight">VidMinder</span>
         </div>
 
-        <Section title="Inbox">
+        <Section title="Inbox" storageKey="inbox">
           <Row
             active={isActive({ kind: "inbox" })}
             label="New from channels"
@@ -221,7 +293,9 @@ export function Sidebar({
           />
         </Section>
 
-        <Section title="Library">
+        {/* Library stays pinned-open — it's the primary nav and we never want
+            users to lose access to "All videos" / Favorites / Watched. */}
+        <Section title="Library" collapsible={false}>
           <Row
             active={isActive({ kind: "all" })}
             label="All videos"
@@ -259,6 +333,7 @@ export function Sidebar({
 
         <Section
           title="Channels"
+          storageKey="channels"
           trailing={
             <span className="flex items-center gap-1.5">
               <button
@@ -303,7 +378,7 @@ export function Sidebar({
         </Section>
 
         {c.folders.size > 0 && (
-          <Section title="Folders">
+          <Section title="Folders" storageKey="folders">
             {sortByCount(c.folders).map(([name, n]) => (
               <Row
                 key={"f:" + name}
@@ -320,7 +395,7 @@ export function Sidebar({
         )}
 
         {c.tags.size > 0 && (
-          <Section title="Tags">
+          <Section title="Tags" storageKey="tags">
             {sortByCount(c.tags).map(([name, n]) => (
               <Row
                 key={"t:" + name}
@@ -337,7 +412,7 @@ export function Sidebar({
         )}
 
         {c.categories.size > 0 && (
-          <Section title="Categories">
+          <Section title="Categories" storageKey="categories">
             {sortByCount(c.categories).map(([name, n]) => (
               <Row
                 key={"c:" + name}
@@ -351,7 +426,7 @@ export function Sidebar({
         )}
 
         {c.sources.size > 1 && (
-          <Section title="Sources">
+          <Section title="Sources" storageKey="sources">
             {sortByCount(c.sources).map(([name, n]) => (
               <Row
                 key={"s:" + name}
