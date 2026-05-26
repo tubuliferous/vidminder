@@ -591,66 +591,92 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
         ..Default::default()
     };
 
+    // Fan out: fetch yt-dlp listing + RSS timestamps for every channel in
+    // parallel. A bounded semaphore keeps us from spawning hundreds of yt-dlp
+    // subprocesses on a user with a giant subscription list.
+    const MAX_CONCURRENT: usize = 8;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+    let mut tasks: tokio::task::JoinSet<(Channel, anyhow::Result<ytdlp::ChannelListing>)> =
+        tokio::task::JoinSet::new();
     for ch in channels {
-        match ytdlp::fetch_channel_listing(&ch.url, PER_CHANNEL_MAX_ENTRIES).await {
-            Ok(mut listing) => {
-                overlay_rss_timestamps(&mut listing.entries, ch.channel_id.as_deref()).await;
-                let db = app.state::<Db>();
-                let conn = db
-                    .0
-                    .lock()
-                    .map_err(|e| AppError::Generic(e.to_string()))?;
-                // Force-apply RSS timestamps even to rows already in the table
-                // (overwriting yt-dlp's approximate values).
-                for entry in &listing.entries {
-                    if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
-                        let _ = db::set_channel_video_timestamp(&conn, ch.id, ext_id, ts);
-                    }
+        let sem = semaphore.clone();
+        tasks.spawn(async move {
+            let _permit = match sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return (ch, Err(anyhow::anyhow!("semaphore closed"))),
+            };
+            let url = ch.url.clone();
+            let ext_id = ch.channel_id.clone();
+            let result = ytdlp::fetch_channel_listing(&url, PER_CHANNEL_MAX_ENTRIES).await;
+            match result {
+                Ok(mut listing) => {
+                    overlay_rss_timestamps(&mut listing.entries, ext_id.as_deref()).await;
+                    (ch, Ok(listing))
                 }
-                for entry in &listing.entries {
-                    let Some(ext_id) = entry.id.as_deref() else {
-                        continue;
-                    };
-                    let Some(page) = entry.webpage() else {
-                        continue;
-                    };
-                    let title = entry.title.clone().unwrap_or_else(|| ext_id.to_string());
-                    let res = db::upsert_channel_video(
-                        &conn,
-                        NewChannelVideo {
-                            channel_id: ch.id,
-                            video_external_id: ext_id,
-                            url: &page,
-                            title: &title,
-                            thumbnail_url: entry.best_thumbnail().as_deref(),
-                            duration: entry.duration.map(|d| d.round() as i64),
-                            upload_date: entry.upload_date.as_deref(),
-                            upload_timestamp: entry.timestamp,
-                            dismissed: false,
-                        },
-                    )
-                    .unwrap_or(db::UpsertResult {
-                        inserted: false,
-                        backfilled_timestamp: false,
-                    });
-                    if res.inserted {
-                        summary.new_videos += 1;
-                    }
-                }
-                let _ = db::set_last_checked(&conn, ch.id, now_secs());
+                Err(e) => (ch, Err(e)),
             }
-            Err(e) => {
-                summary.errors.push(format!("{}: {e:#}", ch.name));
-            }
+        });
+    }
+
+    let mut completed: Vec<(Channel, anyhow::Result<ytdlp::ChannelListing>)> =
+        Vec::with_capacity(summary.checked);
+    while let Some(res) = tasks.join_next().await {
+        if let Ok(pair) = res {
+            completed.push(pair);
         }
     }
 
-    // After backfilling timestamps from yt-dlp, surface anything the original
-    // "pre-dismiss at follow" behavior had hidden that's still within the
-    // last 30 days. User-dismissed entries are excluded by auto_dismissed_at_follow=0.
+    // Drain all results into the database in one acquisition of the Mutex.
     {
         let db = app.state::<Db>();
-        let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
+        let conn = db
+            .0
+            .lock()
+            .map_err(|e| AppError::Generic(e.to_string()))?;
+        for (ch, listing_result) in completed {
+            let listing = match listing_result {
+                Ok(l) => l,
+                Err(e) => {
+                    summary.errors.push(format!("{}: {e:#}", ch.name));
+                    continue;
+                }
+            };
+            for entry in &listing.entries {
+                if let (Some(ext_id), Some(ts)) = (entry.id.as_deref(), entry.timestamp) {
+                    let _ = db::set_channel_video_timestamp(&conn, ch.id, ext_id, ts);
+                }
+            }
+            for entry in &listing.entries {
+                let Some(ext_id) = entry.id.as_deref() else { continue };
+                let Some(page) = entry.webpage() else { continue };
+                let title = entry.title.clone().unwrap_or_else(|| ext_id.to_string());
+                let res = db::upsert_channel_video(
+                    &conn,
+                    NewChannelVideo {
+                        channel_id: ch.id,
+                        video_external_id: ext_id,
+                        url: &page,
+                        title: &title,
+                        thumbnail_url: entry.best_thumbnail().as_deref(),
+                        duration: entry.duration.map(|d| d.round() as i64),
+                        upload_date: entry.upload_date.as_deref(),
+                        upload_timestamp: entry.timestamp,
+                        dismissed: false,
+                    },
+                )
+                .unwrap_or(db::UpsertResult {
+                    inserted: false,
+                    backfilled_timestamp: false,
+                });
+                if res.inserted {
+                    summary.new_videos += 1;
+                }
+            }
+            let _ = db::set_last_checked(&conn, ch.id, now_secs());
+        }
+
+        // After timestamp backfills, surface anything the original "pre-dismiss
+        // at follow" behavior had hidden that's still within the last 30 days.
         let cutoff = now_secs() - RECENT_WINDOW_SECS;
         let n = db::catch_up_all_channels(&conn, cutoff)
             .map_err(|e| AppError::Generic(format!("{e:#}")))?;

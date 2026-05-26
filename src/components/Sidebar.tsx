@@ -278,10 +278,10 @@ export function Sidebar({
               </button>
               <button
                 onClick={onFollowClick}
-                className="text-[12px] leading-none w-4 h-4 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition flex items-center justify-center"
+                className="w-4 h-4 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition flex items-center justify-center"
                 title="Follow a channel"
               >
-                +
+                <PlusIcon />
               </button>
             </span>
           }
@@ -446,6 +446,24 @@ function ExternalLinkIcon() {
       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
       <polyline points="15 3 21 3 21 9" />
       <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }
