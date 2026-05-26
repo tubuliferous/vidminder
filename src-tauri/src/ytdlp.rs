@@ -8,11 +8,24 @@ use tokio::process::Command;
 /// from `externalBin` files when bundling). In dev we fall back to whatever
 /// yt-dlp is on the user's PATH.
 fn yt_dlp_command() -> Command {
-    if let Some(path) = sidecar_path() {
-        return Command::new(path);
-    }
-    Command::new("yt-dlp")
+    let mut cmd = if let Some(path) = sidecar_path() {
+        Command::new(path)
+    } else {
+        Command::new("yt-dlp")
+    };
+    suppress_console_on_windows(&mut cmd);
+    cmd
 }
+
+/// On Windows, spawning a console subprocess from a GUI app pops up a flash of
+/// a black console window. CREATE_NO_WINDOW (0x08000000) suppresses it.
+#[cfg(target_os = "windows")]
+fn suppress_console_on_windows(cmd: &mut Command) {
+    cmd.creation_flags(0x08000000);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn suppress_console_on_windows(_cmd: &mut Command) {}
 
 fn sidecar_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
