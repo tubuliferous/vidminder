@@ -659,6 +659,46 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
             backfilled = true;
         }
     }
+    // Sync metadata that YouTube can change after the fact — channels
+    // routinely rename videos and swap thumbnails after publication. Title,
+    // thumbnail, and duration get overwritten from the channel listing on
+    // every refresh; user-state fields (dismissed, seen_at, etc.) are not
+    // touched.
+    conn.execute(
+        r#"UPDATE channel_videos
+           SET title = ?1
+           WHERE channel_id = ?2 AND video_external_id = ?3
+             AND title IS NOT ?1"#,
+        params![v.title, v.channel_id, v.video_external_id],
+    )?;
+    if v.thumbnail_url.is_some() {
+        conn.execute(
+            r#"UPDATE channel_videos
+               SET thumbnail_url = ?1
+               WHERE channel_id = ?2 AND video_external_id = ?3
+                 AND thumbnail_url IS NOT ?1"#,
+            params![v.thumbnail_url, v.channel_id, v.video_external_id],
+        )?;
+    }
+    if v.duration.is_some() {
+        conn.execute(
+            r#"UPDATE channel_videos
+               SET duration = ?1
+               WHERE channel_id = ?2 AND video_external_id = ?3
+                 AND duration IS NOT ?1"#,
+            params![v.duration, v.channel_id, v.video_external_id],
+        )?;
+    }
+    // If the video has already been added to the library, mirror the title/
+    // thumbnail update into `videos` too — so renamed YouTube uploads stay
+    // recognizable without forcing a delete + re-add.
+    conn.execute(
+        r#"UPDATE videos
+           SET title = ?1,
+               thumbnail_url = COALESCE(?2, thumbnail_url)
+           WHERE url = ?3 AND title IS NOT ?1"#,
+        params![v.title, v.thumbnail_url, v.url],
+    )?;
     if v.upload_date.is_some() {
         conn.execute(
             r#"UPDATE channel_videos

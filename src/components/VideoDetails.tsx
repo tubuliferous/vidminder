@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Channel, Video } from "../types";
 import { formatAddedAt, formatDuration, formatUploadDate } from "../utils";
+import { kbd } from "../platform";
 import * as api from "../api";
 
 type Props = {
@@ -246,7 +247,7 @@ export function VideoDetails({
                 (e.target as HTMLInputElement).blur();
               }
             }}
-            placeholder="Add a tag and press Enter (⌘T to focus)"
+            placeholder={`Add a tag and press Enter (${kbd("T")} to focus)`}
             className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
           />
         </div>

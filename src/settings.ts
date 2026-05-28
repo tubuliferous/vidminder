@@ -5,12 +5,25 @@ export type Theme = "light" | "dark" | "auto";
 export type Settings = {
   theme: Theme;
   autoFavorite: boolean;
+  /// How often the app polls followed channels for new uploads, in minutes.
+  /// 0 disables auto-polling — the user can still hit Refresh manually.
+  pollIntervalMinutes: number;
 };
 
 const DEFAULTS: Settings = {
   theme: "auto",
   autoFavorite: false,
+  pollIntervalMinutes: 30,
 };
+
+export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [
+  { value: 10, label: "Every 10 minutes", hint: "Aggressive — best for high-frequency channels" },
+  { value: 30, label: "Every 30 minutes", hint: "Default — balances freshness and quietness" },
+  { value: 60, label: "Hourly", hint: "Lighter on YouTube and your laptop" },
+  { value: 180, label: "Every 3 hours", hint: "Once or twice during a typical session" },
+  { value: 360, label: "Every 6 hours", hint: "Mostly passive" },
+  { value: 0, label: "Manual only", hint: "Never poll automatically — Refresh button only" },
+];
 
 const STORAGE_KEY = "vidminder.settings.v1";
 

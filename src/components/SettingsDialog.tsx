@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 import type { Settings, Theme } from "../settings";
+import { POLL_INTERVAL_PRESETS } from "../settings";
+import { kbd } from "../platform";
 
 type Props = {
   open: boolean;
@@ -41,7 +43,9 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-[16px] font-semibold leading-none">Settings</h2>
-            <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">⌘, to open · Esc to close</div>
+            <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
+              {kbd(",")} to open · Esc to close
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -89,6 +93,30 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
 
         <section className="mt-6 pt-5 border-t border-[var(--color-line)]">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-2">
+            Channel polling
+          </div>
+          <select
+            value={settings.pollIntervalMinutes}
+            onChange={(e) =>
+              onChange({ pollIntervalMinutes: parseInt(e.target.value, 10) })
+            }
+            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+          >
+            {POLL_INTERVAL_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
+            {POLL_INTERVAL_PRESETS.find(
+              (p) => p.value === settings.pollIntervalMinutes
+            )?.hint ?? ""}
+          </div>
+        </section>
+
+        <section className="mt-6 pt-5 border-t border-[var(--color-line)]">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-2">
             Library
           </div>
           <label className="flex items-start gap-3 cursor-pointer">
@@ -113,7 +141,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
             <li>Drop a video URL anywhere to add it to your list.</li>
             <li>Drop a channel URL (<code className="text-[var(--color-ink-dim)]">youtube.com/@channel</code>) to follow it.</li>
             <li>Drag videos onto a folder, tag, or Favorites in the sidebar.</li>
-            <li>⌘Z undoes any change · Delete removes the highlighted video.</li>
+            <li>{kbd("Z")} undoes any change · Delete removes the highlighted video.</li>
           </ul>
         </section>
       </div>

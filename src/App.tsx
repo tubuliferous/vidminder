@@ -26,6 +26,7 @@ import {
   RECENCY_ORDER,
 } from "./utils";
 import { useSettings } from "./settings";
+import { kbd, kbdClick, shiftClick } from "./platform";
 
 type Pending = { id: string; url: string };
 type Toast = {
@@ -198,6 +199,20 @@ function App() {
     refreshChannelsList();
     refreshInbox();
   }, [refreshVideos, refreshChannelsList, refreshInbox]);
+
+  // Periodic channel refresh, frequency controlled by user setting.
+  // The Rust side handles the initial startup poll; we own the recurring
+  // schedule here so changes take effect immediately without a restart.
+  useEffect(() => {
+    const minutes = settings.pollIntervalMinutes;
+    if (!minutes || minutes <= 0) return; // "Manual only"
+    const id = setInterval(() => {
+      // Fire-and-forget — manual Refresh surfaces errors via toast; the
+      // background tick is meant to be quiet, so swallow silently.
+      api.refreshChannels().catch(() => {});
+    }, minutes * 60 * 1000);
+    return () => clearInterval(id);
+  }, [settings.pollIntervalMinutes]);
 
   // Backend events (e.g. background polling brought in new inbox items)
   useEffect(() => {
@@ -1493,7 +1508,7 @@ function App() {
               className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
             />
             <div className="text-[11.5px] text-[var(--color-ink-faint)] hidden md:block">
-              ⌘K search · ⌘V paste · ⌘Z undo · Delete remove
+              {kbd("K")} search · {kbd("V")} paste · {kbd("Z")} undo · Delete remove
             </div>
             <button
               onClick={() => setAddOpen((x) => !x)}
@@ -1828,7 +1843,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="w-full h-full border-l border-[var(--color-line)] bg-[var(--color-surface)] flex items-center justify-center text-[12.5px] text-[var(--color-ink-faint)] px-6 text-center">
-                    Click a video to edit it. Shift-click to select a range, ⌘-click to toggle individual videos. ⌘Z undoes any change · Delete removes the selection.
+                    Click a video to edit it. {shiftClick} to select a range, {kbdClick()} to toggle individual videos. {kbd("Z")} undoes any change · Delete removes the selection.
                   </div>
                 )}
               </div>
@@ -1925,7 +1940,7 @@ function EmptyState({
         <div>
           <div className="text-[18px] font-semibold mb-2">Your library is empty</div>
           <div className="text-[13px] text-[var(--color-ink-dim)] max-w-md leading-relaxed">
-            Drag a video URL from your browser's address bar onto this window, paste one with ⌘V, or click{" "}
+            Drag a video URL from your browser's address bar onto this window, paste one with {kbd("V")}, or click{" "}
             <span className="text-[var(--color-accent)]">+ Add URL</span>. Channel URLs (e.g.{" "}
             <code className="text-[var(--color-ink)]">youtube.com/@SomeChannel</code>) start following the channel instead.
           </div>

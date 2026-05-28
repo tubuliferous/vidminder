@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Video } from "../types";
+import { kbdClick, shiftClick } from "../platform";
 
 type Props = {
   videos: Video[];
@@ -120,7 +121,7 @@ export function MultiVideoDetails({
               {n} videos selected
             </h2>
             <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
-              Esc to clear · ⌘-click to toggle · Shift-click to extend
+              Esc to clear · {kbdClick()} to toggle · {shiftClick} to extend
             </div>
           </div>
           <button

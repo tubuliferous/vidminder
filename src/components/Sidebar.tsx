@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Channel, Filter, Video } from "../types";
 import { DRAG_MIME } from "../utils";
+import { kbd } from "../platform";
 import * as api from "../api";
 
 type Props = {
@@ -442,11 +443,11 @@ export function Sidebar({
 
       <div className="shrink-0 border-t border-[var(--color-line)] px-3 py-2 flex items-center justify-between">
         <span className="text-[10.5px] text-[var(--color-ink-faint)]">
-          ⌘, to open settings
+          {kbd(",")} to open settings
         </span>
         <button
           onClick={onOpenSettings}
-          title="Settings (⌘,)"
+          title={`Settings (${kbd(",")})`}
           className="w-7 h-7 rounded-md text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition flex items-center justify-center"
         >
           <GearIcon />

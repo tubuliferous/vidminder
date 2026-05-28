@@ -9,7 +9,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
-const REFRESH_INTERVAL_SECS: u64 = 30 * 60;
 const INITIAL_REFRESH_DELAY_SECS: u64 = 8;
 // Pull deep enough to cover at least the last month for typical channels.
 // High-frequency channels (multiple uploads per day) may still get cut off,
@@ -490,6 +489,12 @@ async fn enrich_timestamps(
     };
 
     // 3. Per-video yt-dlp for entries still not verified.
+    //    Skip entries whose approximate timestamp already places them well
+    //    outside the recent window — they bucket as "Earlier" no matter
+    //    what we verify, so paying the per-video cost just to refine their
+    //    date is wasted. Entries without any timestamp still get verified
+    //    (we have no idea where they fall).
+    let now = now_secs();
     let need_fetch: Vec<(usize, String, String)> = entries
         .iter()
         .enumerate()
@@ -497,6 +502,11 @@ async fn enrich_timestamps(
             let id = e.id.as_deref()?;
             if verified_now.contains(id) || already_verified.contains(id) {
                 return None;
+            }
+            if let Some(ts) = e.timestamp {
+                if ts > 0 && (now - ts) > RECENT_WINDOW_SECS {
+                    return None;
+                }
             }
             let url = e.webpage()?;
             Some((i, id.to_string(), url))
@@ -508,7 +518,7 @@ async fn enrich_timestamps(
         return verified_now;
     }
 
-    const PER_VIDEO_CONCURRENCY: usize = 4;
+    const PER_VIDEO_CONCURRENCY: usize = 8;
     let sem = Arc::new(tokio::sync::Semaphore::new(PER_VIDEO_CONCURRENCY));
     let mut tasks: tokio::task::JoinSet<(usize, String, Option<i64>)> =
         tokio::task::JoinSet::new();
@@ -887,13 +897,12 @@ fn now_secs() -> i64 {
 }
 
 fn spawn_background_refresh(app: AppHandle) {
+    // Single startup refresh after a short delay. The recurring schedule is
+    // owned by the frontend (so it can respect the user's
+    // `pollIntervalMinutes` setting and react immediately to changes).
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(INITIAL_REFRESH_DELAY_SECS)).await;
         let _ = refresh_all_channels(&app).await;
-        loop {
-            tokio::time::sleep(Duration::from_secs(REFRESH_INTERVAL_SECS)).await;
-            let _ = refresh_all_channels(&app).await;
-        }
     });
 }
 
