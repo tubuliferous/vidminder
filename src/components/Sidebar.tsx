@@ -1,12 +1,13 @@
 import { useRef, useState } from "react";
-import type { Channel, Filter, Video } from "../types";
-import { DRAG_MIME } from "../utils";
+import type { Channel, Filter, Playlist, Video } from "../types";
+import { DRAG_MIME, extractUrlFromDrop } from "../utils";
 import { kbd } from "../platform";
 import * as api from "../api";
 
 type Props = {
   videos: Video[];
   channels: Channel[];
+  playlists: Playlist[];
   inboxCount: number;
   filter: Filter;
   onFilter: (f: Filter) => void;
@@ -20,6 +21,11 @@ type Props = {
   onDropToWatched: (videoId: number) => void;
   onDropToUnwatched: (videoId: number) => void;
   onChannelCategoryChange: (channelId: number, category: string | null) => void;
+  onCreatePlaylist: (name: string) => void;
+  onRenamePlaylist: (id: number, name: string) => void;
+  onDeletePlaylist: (id: number) => void;
+  onDropVideoToPlaylist: (videoId: number, playlistId: number) => void;
+  onDropUrlToPlaylist: (url: string, playlistId: number) => void;
   onOpenSettings: () => void;
 };
 
@@ -259,6 +265,7 @@ function Row({
 export function Sidebar({
   videos,
   channels,
+  playlists,
   inboxCount,
   filter,
   onFilter,
@@ -272,8 +279,15 @@ export function Sidebar({
   onDropToWatched,
   onDropToUnwatched,
   onChannelCategoryChange,
+  onCreatePlaylist,
+  onRenamePlaylist,
+  onDeletePlaylist,
+  onDropVideoToPlaylist,
+  onDropUrlToPlaylist,
   onOpenSettings,
 }: Props) {
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState("");
   const c = counts(videos);
   const total = videos.length;
   const unwatched = total - c.watched;
@@ -356,7 +370,7 @@ export function Sidebar({
               </button>
               <button
                 onClick={onFollowClick}
-                className="w-[18px] h-[18px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
+                className="w-[14px] h-[14px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
                 title="Follow a channel"
               >
                 <PlusIcon />
@@ -375,6 +389,72 @@ export function Sidebar({
               onFilter={onFilter}
               onCategoryChange={onChannelCategoryChange}
             />
+          )}
+        </Section>
+
+        <Section
+          title="Playlists"
+          storageKey="playlists"
+          trailing={
+            <button
+              onClick={() => {
+                setCreatingPlaylist((x) => !x);
+                setNewPlaylistName("");
+              }}
+              className="w-[14px] h-[14px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
+              title="New playlist"
+            >
+              <PlusIcon />
+            </button>
+          }
+        >
+          {creatingPlaylist && (
+            <div className="px-1.5 mb-1">
+              <input
+                autoFocus
+                value={newPlaylistName}
+                onChange={(e) => setNewPlaylistName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const name = newPlaylistName.trim();
+                    if (name) onCreatePlaylist(name);
+                    setNewPlaylistName("");
+                    setCreatingPlaylist(false);
+                  }
+                  if (e.key === "Escape") {
+                    setNewPlaylistName("");
+                    setCreatingPlaylist(false);
+                  }
+                }}
+                onBlur={() => {
+                  const name = newPlaylistName.trim();
+                  if (name) onCreatePlaylist(name);
+                  setNewPlaylistName("");
+                  setCreatingPlaylist(false);
+                }}
+                placeholder="Playlist name, Enter to create"
+                className="w-full text-[12.5px] px-2 py-[3px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+              />
+            </div>
+          )}
+          {playlists.length === 0 && !creatingPlaylist ? (
+            <div className="px-3 text-[11.5px] text-[var(--color-ink-faint)] leading-snug">
+              Click <span className="text-[var(--color-ink-dim)]">+</span> to make a playlist, then drag videos (or drop a URL) onto it.
+            </div>
+          ) : (
+            playlists.map((pl) => (
+              <PlaylistRow
+                key={pl.id}
+                playlist={pl}
+                active={isActive({ kind: "playlist", playlistId: pl.id })}
+                draggingVideo={draggingVideo}
+                onSelect={() => onFilter({ kind: "playlist", playlistId: pl.id })}
+                onRename={(name) => onRenamePlaylist(pl.id, name)}
+                onDelete={() => onDeletePlaylist(pl.id)}
+                onDropVideo={(vid) => onDropVideoToPlaylist(vid, pl.id)}
+                onDropUrl={(url) => onDropUrlToPlaylist(url, pl.id)}
+              />
+            ))
           )}
         </Section>
 
@@ -650,6 +730,170 @@ function ChannelRow({
   );
 }
 
+function PlaylistRow({
+  playlist,
+  active,
+  draggingVideo,
+  onSelect,
+  onRename,
+  onDelete,
+  onDropVideo,
+  onDropUrl,
+}: {
+  playlist: Playlist;
+  active: boolean;
+  draggingVideo: boolean;
+  onSelect: () => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+  onDropVideo: (videoId: number) => void;
+  onDropUrl: (url: string) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(playlist.name);
+  const dragDepth = useRef(0);
+
+  const dropTypes = (e: React.DragEvent) => Array.from(e.dataTransfer.types || []);
+  const carriesDrop = (e: React.DragEvent) => {
+    const t = dropTypes(e);
+    return t.includes(DRAG_MIME) || t.includes("text/uri-list") || t.includes("text/plain");
+  };
+
+  if (editing) {
+    return (
+      <div className="mx-1.5 px-2 py-[5px]">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (draft.trim()) onRename(draft.trim());
+              setEditing(false);
+            }
+            if (e.key === "Escape") {
+              setDraft(playlist.name);
+              setEditing(false);
+            }
+          }}
+          onBlur={() => {
+            if (draft.trim() && draft.trim() !== playlist.name) onRename(draft.trim());
+            setEditing(false);
+          }}
+          className="w-full text-[12.5px] px-2 py-[2px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-url-drop-target="true"
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      onDragEnter={(e) => {
+        if (!carriesDrop(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        if (dragDepth.current === 1) setHover(true);
+      }}
+      onDragOver={(e) => {
+        if (!carriesDrop(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setHover(false);
+      }}
+      onDrop={(e) => {
+        dragDepth.current = 0;
+        setHover(false);
+        const vid = e.dataTransfer.getData(DRAG_MIME);
+        if (vid) {
+          e.preventDefault();
+          onDropVideo(+vid);
+          return;
+        }
+        const url = extractUrlFromDrop(e);
+        if (url) {
+          e.preventDefault();
+          onDropUrl(url);
+        }
+      }}
+      className={
+        "group flex items-center justify-between text-left text-[13px] rounded-md mx-1.5 px-2 py-[5px] transition-colors cursor-pointer " +
+        (hover
+          ? "bg-[var(--color-accent)] text-black ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]"
+          : active
+          ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
+          : draggingVideo
+          ? "text-[var(--color-ink-dim)] bg-[var(--color-surface-2)]/40 outline-dashed outline-2 outline-[var(--color-accent)]/55 outline-offset-[-3px]"
+          : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
+      }
+    >
+      <span className="truncate flex-1">{playlist.name}</span>
+      <span className="flex items-center gap-1.5 shrink-0">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setDraft(playlist.name);
+            setEditing(true);
+          }}
+          title="Rename playlist"
+          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
+        >
+          <PencilIcon />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete playlist"
+          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
+        >
+          ×
+        </button>
+        <span
+          className={
+            "text-[11px] tabular-nums " +
+            (hover ? "text-black/70" : "text-[var(--color-ink-faint)]")
+          }
+        >
+          {playlist.video_count}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  );
+}
+
 function TagIcon() {
   return (
     <svg
@@ -693,8 +937,8 @@ function PlusIcon() {
   // SVG look visually off-center inside a small flex container.
   return (
     <svg
-      width="10"
-      height="10"
+      width="8"
+      height="8"
       viewBox="0 0 10 10"
       fill="currentColor"
       className="block"

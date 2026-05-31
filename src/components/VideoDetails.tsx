@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Channel, Video } from "../types";
+import type { Channel, Playlist, Video } from "../types";
 import { formatAddedAt, formatDuration, formatUploadDate } from "../utils";
 import { kbd } from "../platform";
 import * as api from "../api";
@@ -8,6 +8,7 @@ type Props = {
   video: Video;
   knownFolders: string[];
   followedChannels: Channel[];
+  playlists: Playlist[];
   onAddTag: (video: Video, tag: string) => void;
   onRemoveTag: (video: Video, tag: string) => void;
   onSetFolder: (video: Video, folder: string | null) => void;
@@ -16,12 +17,16 @@ type Props = {
   onOpen: (video: Video) => void;
   onRequestDelete: () => void;
   onFollowChannel: (video: Video) => void;
+  onAddToPlaylist: (videos: Video[], playlistId: number) => void;
+  onRemoveFromPlaylist: (videos: Video[], playlistId: number) => void;
+  onCreatePlaylist: (name: string) => Promise<Playlist | null>;
 };
 
 export function VideoDetails({
   video,
   knownFolders,
   followedChannels,
+  playlists,
   onAddTag,
   onRemoveTag,
   onSetFolder,
@@ -30,7 +35,12 @@ export function VideoDetails({
   onOpen,
   onRequestDelete,
   onFollowChannel,
+  onAddToPlaylist,
+  onRemoveFromPlaylist,
+  onCreatePlaylist,
 }: Props) {
+  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
+  const [playlistFilter, setPlaylistFilter] = useState("");
   const [tagInput, setTagInput] = useState("");
   const [folderInput, setFolderInput] = useState(video.folder ?? "");
   const [editingFolder, setEditingFolder] = useState(false);
@@ -250,6 +260,112 @@ export function VideoDetails({
             placeholder={`Add a tag and press Enter (${kbd("T")} to focus)`}
             className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
           />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+            Playlists
+          </label>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {video.playlist_ids.length === 0 && (
+              <span className="text-[12px] text-[var(--color-ink-faint)]">
+                Not in any playlist
+              </span>
+            )}
+            {video.playlist_ids.map((pid) => {
+              const pl = playlists.find((p) => p.id === pid);
+              if (!pl) return null;
+              return (
+                <span
+                  key={pid}
+                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-[var(--color-line)]"
+                >
+                  {pl.name}
+                  <button
+                    onClick={() => onRemoveFromPlaylist([video], pid)}
+                    className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+                    title={`Remove from ${pl.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setPlaylistMenuOpen((x) => !x);
+                setPlaylistFilter("");
+              }}
+              className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
+            >
+              + Add to playlist
+            </button>
+            {playlistMenuOpen && (
+              <div className="absolute z-20 mt-1 w-full max-w-[260px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl p-1.5">
+                <input
+                  autoFocus
+                  value={playlistFilter}
+                  onChange={(e) => setPlaylistFilter(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Escape") setPlaylistMenuOpen(false);
+                    if (e.key === "Enter") {
+                      const name = playlistFilter.trim();
+                      const existing = playlists.find(
+                        (p) => p.name.toLowerCase() === name.toLowerCase()
+                      );
+                      if (existing) {
+                        onAddToPlaylist([video], existing.id);
+                      } else if (name) {
+                        const pl = await onCreatePlaylist(name);
+                        if (pl) onAddToPlaylist([video], pl.id);
+                      }
+                      setPlaylistMenuOpen(false);
+                    }
+                  }}
+                  placeholder="Filter or type a new name…"
+                  className="w-full text-[12.5px] px-2 py-1 rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)] mb-1"
+                />
+                <div className="max-h-40 overflow-y-auto">
+                  {playlists
+                    .filter(
+                      (p) =>
+                        !video.playlist_ids.includes(p.id) &&
+                        p.name.toLowerCase().includes(playlistFilter.trim().toLowerCase())
+                    )
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          onAddToPlaylist([video], p.id);
+                          setPlaylistMenuOpen(false);
+                        }}
+                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  {playlistFilter.trim() &&
+                    !playlists.some(
+                      (p) =>
+                        p.name.toLowerCase() === playlistFilter.trim().toLowerCase()
+                    ) && (
+                      <button
+                        onClick={async () => {
+                          const pl = await onCreatePlaylist(playlistFilter.trim());
+                          if (pl) onAddToPlaylist([video], pl.id);
+                          setPlaylistMenuOpen(false);
+                        }}
+                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-accent)]"
+                      >
+                        + Create “{playlistFilter.trim()}”
+                      </button>
+                    )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {video.description && (

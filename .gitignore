@@ -16,6 +16,12 @@ dist-ssr
 # locally, or by the CI workflow before each build.
 src-tauri/binaries/
 
+# Local dev icon overrides. Populated by `npx tauri icon <your.png> --output
+# src-tauri/icons-dev`. Not part of the production build — used only by
+# `npm run tauri:dev` via tauri.conf.dev.json.
+src-tauri/icons-dev/*
+!src-tauri/icons-dev/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

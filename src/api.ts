@@ -5,6 +5,7 @@ import type {
   Channel,
   ChannelVideo,
   IngestResult,
+  Playlist,
   RefreshSummary,
   Video,
 } from "./types";
@@ -110,6 +111,33 @@ export async function addTag(id: number, tag: string): Promise<string[]> {
 
 export async function removeTag(id: number, tag: string): Promise<string[]> {
   return await invoke<string[]>("remove_tag", { id, tag });
+}
+
+export async function listPlaylists(): Promise<Playlist[]> {
+  return await invoke<Playlist[]>("list_playlists");
+}
+
+export async function createPlaylist(name: string): Promise<Playlist> {
+  return await invoke<Playlist>("create_playlist", { name });
+}
+
+export async function deletePlaylist(id: number): Promise<void> {
+  await invoke("delete_playlist", { id });
+}
+
+export async function renamePlaylist(id: number, name: string): Promise<void> {
+  await invoke("rename_playlist", { id, name });
+}
+
+export async function addToPlaylist(playlistId: number, videoId: number): Promise<void> {
+  await invoke("add_to_playlist", { playlistId, videoId });
+}
+
+export async function removeFromPlaylist(
+  playlistId: number,
+  videoId: number
+): Promise<void> {
+  await invoke("remove_from_playlist", { playlistId, videoId });
 }
 
 export async function openInBrowser(url: string): Promise<void> {

@@ -13,11 +13,19 @@ export type Video = {
   raw_tags: string[];
   folder: string | null;
   user_tags: string[];
+  playlist_ids: number[];
   watched: boolean;
   favorite: boolean;
   added_at: number;
   channel_url: string | null;
   channel_id: string | null;
+};
+
+export type Playlist = {
+  id: number;
+  name: string;
+  created_at: number;
+  video_count: number;
 };
 
 export type Channel = {
@@ -75,4 +83,5 @@ export type Filter =
   | { kind: "folder"; name: string }
   | { kind: "category"; name: string }
   | { kind: "source"; name: string }
-  | { kind: "channel"; channelId: number };
+  | { kind: "channel"; channelId: number }
+  | { kind: "playlist"; playlistId: number };

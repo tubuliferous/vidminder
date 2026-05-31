@@ -1,14 +1,16 @@
 {
   "name": "vidminder",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "install-sidecar": "node scripts/install-sidecar.mjs"
+    "tauri:dev": "tauri dev --config src-tauri/tauri.conf.dev.json",
+    "install-sidecar": "node scripts/install-sidecar.mjs",
+    "install-dev-icon": "node scripts/install-dev-icon.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

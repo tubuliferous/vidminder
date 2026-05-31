@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Video } from "../types";
+import type { Playlist, Video } from "../types";
 import { kbdClick, shiftClick } from "../platform";
 
 type Props = {
   videos: Video[];
   knownFolders: string[];
+  playlists: Playlist[];
   onSetWatched: (videos: Video[], watched: boolean) => void;
   onSetFavorite: (videos: Video[], favorite: boolean) => void;
   onSetFolder: (videos: Video[], folder: string | null) => void;
   onAddTag: (videos: Video[], tag: string) => void;
   onRemoveTag: (videos: Video[], tag: string) => void;
+  onAddToPlaylist: (videos: Video[], playlistId: number) => void;
+  onRemoveFromPlaylist: (videos: Video[], playlistId: number) => void;
+  onCreatePlaylist: (name: string) => Promise<Playlist | null>;
   onDeleteAll: (videos: Video[]) => void;
   onClearSelection: () => void;
 };
@@ -17,14 +21,20 @@ type Props = {
 export function MultiVideoDetails({
   videos,
   knownFolders,
+  playlists,
   onSetWatched,
   onSetFavorite,
   onSetFolder,
   onAddTag,
   onRemoveTag,
+  onAddToPlaylist,
+  onRemoveFromPlaylist,
+  onCreatePlaylist,
   onDeleteAll,
   onClearSelection,
 }: Props) {
+  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
+  const [playlistFilter, setPlaylistFilter] = useState("");
   const n = videos.length;
   const [tagInput, setTagInput] = useState("");
   const [folderInput, setFolderInput] = useState("");
@@ -102,6 +112,27 @@ export function MultiVideoDetails({
     onSetFolder(videos, next);
     setEditingFolder(false);
   };
+
+  // Playlists present on ALL selected (shared) vs SOME (partial).
+  const { sharedPlaylists, partialPlaylists } = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const v of videos) {
+      for (const pid of v.playlist_ids) {
+        counts.set(pid, (counts.get(pid) ?? 0) + 1);
+      }
+    }
+    const shared: Playlist[] = [];
+    const partial: { pl: Playlist; count: number }[] = [];
+    for (const [pid, count] of counts) {
+      const pl = playlists.find((p) => p.id === pid);
+      if (!pl) continue;
+      if (count === n) shared.push(pl);
+      else partial.push({ pl, count });
+    }
+    shared.sort((a, b) => a.name.localeCompare(b.name));
+    partial.sort((a, b) => b.count - a.count || a.pl.name.localeCompare(b.pl.name));
+    return { sharedPlaylists: shared, partialPlaylists: partial };
+  }, [videos, playlists, n]);
 
   // Watched / favorite labels & next states
   const watchedLabel = watchedAll
@@ -309,6 +340,134 @@ export function MultiVideoDetails({
             placeholder={`Add a tag to all ${n} (Enter to apply)`}
             className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
           />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+            Playlists
+            <span className="ml-2 text-[10px] normal-case tracking-normal text-[var(--color-ink-faint)]">
+              shared · partial
+            </span>
+          </label>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {sharedPlaylists.length === 0 && partialPlaylists.length === 0 && (
+              <span className="text-[12px] text-[var(--color-ink-faint)]">
+                None of the selected are in a playlist.
+              </span>
+            )}
+            {sharedPlaylists.map((pl) => (
+              <span
+                key={"s" + pl.id}
+                className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-[var(--color-line)]"
+                title="In all selected"
+              >
+                {pl.name}
+                <button
+                  onClick={() => onRemoveFromPlaylist(videos, pl.id)}
+                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+                  title={`Remove all from ${pl.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {partialPlaylists.map(({ pl, count }) => (
+              <span
+                key={"p" + pl.id}
+                className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-dashed border-[var(--color-line)]"
+                title={`In ${count} of ${n}`}
+              >
+                {pl.name}
+                <span className="text-[10px] text-[var(--color-ink-faint)] tabular-nums">
+                  {count}/{n}
+                </span>
+                <button
+                  onClick={() => onAddToPlaylist(videos, pl.id)}
+                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] opacity-0 group-hover:opacity-100 transition"
+                  title={`Add remaining ${n - count} to ${pl.name}`}
+                >
+                  +
+                </button>
+                <button
+                  onClick={() => onRemoveFromPlaylist(videos, pl.id)}
+                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+                  title={`Remove from the ${count} that have it`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setPlaylistMenuOpen((x) => !x);
+                setPlaylistFilter("");
+              }}
+              className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
+            >
+              + Add all to playlist
+            </button>
+            {playlistMenuOpen && (
+              <div className="absolute z-20 mt-1 w-full max-w-[260px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl p-1.5">
+                <input
+                  autoFocus
+                  value={playlistFilter}
+                  onChange={(e) => setPlaylistFilter(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Escape") setPlaylistMenuOpen(false);
+                    if (e.key === "Enter") {
+                      const name = playlistFilter.trim();
+                      const existing = playlists.find(
+                        (p) => p.name.toLowerCase() === name.toLowerCase()
+                      );
+                      if (existing) onAddToPlaylist(videos, existing.id);
+                      else if (name) {
+                        const pl = await onCreatePlaylist(name);
+                        if (pl) onAddToPlaylist(videos, pl.id);
+                      }
+                      setPlaylistMenuOpen(false);
+                    }
+                  }}
+                  placeholder="Filter or type a new name…"
+                  className="w-full text-[12.5px] px-2 py-1 rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)] mb-1"
+                />
+                <div className="max-h-40 overflow-y-auto">
+                  {playlists
+                    .filter((p) =>
+                      p.name.toLowerCase().includes(playlistFilter.trim().toLowerCase())
+                    )
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          onAddToPlaylist(videos, p.id);
+                          setPlaylistMenuOpen(false);
+                        }}
+                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  {playlistFilter.trim() &&
+                    !playlists.some(
+                      (p) => p.name.toLowerCase() === playlistFilter.trim().toLowerCase()
+                    ) && (
+                      <button
+                        onClick={async () => {
+                          const pl = await onCreatePlaylist(playlistFilter.trim());
+                          if (pl) onAddToPlaylist(videos, pl.id);
+                          setPlaylistMenuOpen(false);
+                        }}
+                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-accent)]"
+                      >
+                        + Create “{playlistFilter.trim()}”
+                      </button>
+                    )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="pt-2 border-t border-[var(--color-line)]">

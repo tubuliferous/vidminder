@@ -127,6 +127,38 @@ export function normalizeYouTubeInput(raw: string): string | null {
   return null;
 }
 
+/// Mirror of the Rust-side heuristic — does this URL look like a channel page
+/// rather than a single video? Used only for labeling the pending tracker;
+/// the backend makes the authoritative video-vs-channel decision.
+export function looksLikeChannelUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    const host = u.host.toLowerCase();
+    if (host === "youtube.com" || host.endsWith(".youtube.com")) {
+      const p = u.pathname;
+      if (
+        p.startsWith("/watch") ||
+        p.startsWith("/shorts/") ||
+        p.startsWith("/live/") ||
+        p.startsWith("/embed/")
+      ) {
+        return false;
+      }
+      if (
+        p.startsWith("/@") ||
+        p.startsWith("/channel/") ||
+        p.startsWith("/c/") ||
+        p.startsWith("/user/")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export type RecencyBucket = "today" | "thisWeek" | "lastWeek" | "older";
 
 export const RECENCY_LABELS: Record<RecencyBucket, string> = {

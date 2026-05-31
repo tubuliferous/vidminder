@@ -22,11 +22,20 @@ pub struct Video {
     pub raw_tags: Vec<String>,
     pub folder: Option<String>,
     pub user_tags: Vec<String>,
+    pub playlist_ids: Vec<i64>,
     pub watched: bool,
     pub favorite: bool,
     pub added_at: i64,
     pub channel_url: Option<String>,
     pub channel_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Playlist {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    pub video_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -129,6 +138,24 @@ pub fn open_db() -> Result<Db> {
             FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS playlist_videos (
+            playlist_id INTEGER NOT NULL,
+            video_id INTEGER NOT NULL,
+            added_at INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (playlist_id, video_id),
+            FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+            FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playlist_videos_pl ON playlist_videos(playlist_id);
+        CREATE INDEX IF NOT EXISTS idx_playlist_videos_vid ON playlist_videos(video_id);
         CREATE INDEX IF NOT EXISTS idx_videos_folder ON videos(folder);
         CREATE INDEX IF NOT EXISTS idx_videos_category ON videos(category);
         CREATE INDEX IF NOT EXISTS idx_videos_added_at ON videos(added_at DESC);
@@ -310,6 +337,7 @@ pub fn get_video(conn: &Connection, id: i64) -> Result<Option<Video>> {
     match row {
         Some(Ok(mut v)) => {
             v.user_tags = list_tags_for_video(conn, v.id)?;
+            v.playlist_ids = list_playlists_for_video(conn, v.id)?;
             Ok(Some(v))
         }
         Some(Err(e)) => Err(e.into()),
@@ -330,6 +358,7 @@ pub fn list_videos(conn: &Connection) -> Result<Vec<Video>> {
     for row in rows {
         let mut v = row??;
         v.user_tags = list_tags_for_video(conn, v.id)?;
+        v.playlist_ids = list_playlists_for_video(conn, v.id)?;
         out.push(v);
     }
     Ok(out)
@@ -355,12 +384,108 @@ fn row_to_video(r: &rusqlite::Row<'_>) -> rusqlite::Result<Video> {
         raw_tags,
         folder: r.get("folder")?,
         user_tags: Vec::new(),
+        playlist_ids: Vec::new(),
         watched: watched_int != 0,
         favorite: favorite_int != 0,
         added_at: r.get("added_at")?,
         channel_url: r.get("channel_url").ok(),
         channel_id: r.get("channel_id").ok(),
     })
+}
+
+// --- Playlists ----------------------------------------------------------------
+
+pub fn list_playlists_for_video(conn: &Connection, video_id: i64) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT playlist_id FROM playlist_videos WHERE video_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![video_id], |r| r.get::<_, i64>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>> {
+    let mut stmt = conn.prepare(
+        r#"SELECT p.id, p.name, p.created_at,
+                  (SELECT COUNT(*) FROM playlist_videos pv WHERE pv.playlist_id = p.id) AS video_count
+           FROM playlists p
+           ORDER BY p.name COLLATE NOCASE"#,
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Playlist {
+            id: r.get("id")?,
+            name: r.get("name")?,
+            created_at: r.get("created_at")?,
+            video_count: r.get("video_count")?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("playlist name is empty");
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO playlists (name, created_at) VALUES (?1, ?2)",
+        params![name, unix_now()],
+    )?;
+    let id: i64 = conn.query_row(
+        "SELECT id FROM playlists WHERE name = ?1 COLLATE NOCASE",
+        params![name],
+        |r| r.get(0),
+    )?;
+    Ok(id)
+}
+
+pub fn delete_playlist(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("playlist name is empty");
+    }
+    conn.execute(
+        "UPDATE playlists SET name = ?1 WHERE id = ?2",
+        params![name, id],
+    )?;
+    Ok(())
+}
+
+pub fn add_video_to_playlist(conn: &Connection, playlist_id: i64, video_id: i64) -> Result<()> {
+    // position = current max + 1 so playlists keep insertion order.
+    let next_pos: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_videos WHERE playlist_id = ?1",
+            params![playlist_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT OR IGNORE INTO playlist_videos (playlist_id, video_id, added_at, position)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![playlist_id, video_id, unix_now(), next_pos],
+    )?;
+    Ok(())
+}
+
+pub fn remove_video_from_playlist(
+    conn: &Connection,
+    playlist_id: i64,
+    video_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM playlist_videos WHERE playlist_id = ?1 AND video_id = ?2",
+        params![playlist_id, video_id],
+    )?;
+    Ok(())
 }
 
 pub fn delete_video(conn: &Connection, id: i64) -> Result<()> {

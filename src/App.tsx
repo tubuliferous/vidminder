@@ -7,6 +7,7 @@ import type {
   ChannelVideo,
   Filter,
   IngestResult,
+  Playlist,
   Video,
 } from "./types";
 import { Sidebar } from "./components/Sidebar";
@@ -20,6 +21,7 @@ import { SearchPalette } from "./components/SearchPalette";
 import {
   DRAG_MIME,
   extractUrlFromDrop,
+  looksLikeChannelUrl,
   normalizeYouTubeInput,
   recencyBucket,
   RECENCY_LABELS,
@@ -28,7 +30,8 @@ import {
 import { useSettings } from "./settings";
 import { kbd, kbdClick, shiftClick } from "./platform";
 
-type Pending = { id: string; url: string };
+type Pending = { id: string; url: string; kind: "video" | "channel" };
+type SortMode = "added" | "uploaded";
 type Toast = {
   id: number;
   kind: "ok" | "err" | "undo";
@@ -51,6 +54,7 @@ function App() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [inbox, setInbox] = useState<ChannelVideo[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
   // Multi-select. selectedIds carries the full selection; anchorId is the
   // pivot for shift-click range selects. Treat single selection as a set of
@@ -69,6 +73,7 @@ function App() {
   const [followOpen, setFollowOpen] = useState(false);
   const [followInput, setFollowInput] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>("added");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
@@ -194,11 +199,20 @@ function App() {
     }
   }, [pushToast]);
 
+  const refreshPlaylists = useCallback(async () => {
+    try {
+      setPlaylists(await api.listPlaylists());
+    } catch (e) {
+      pushToast({ kind: "err", text: `Could not load playlists: ${e}` });
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     refreshVideos();
     refreshChannelsList();
     refreshInbox();
-  }, [refreshVideos, refreshChannelsList, refreshInbox]);
+    refreshPlaylists();
+  }, [refreshVideos, refreshChannelsList, refreshInbox, refreshPlaylists]);
 
   // Periodic channel refresh, frequency controlled by user setting.
   // The Rust side handles the initial startup poll; we own the recurring
@@ -323,7 +337,9 @@ function App() {
         return;
       }
       const pendId = crypto.randomUUID();
-      setPending((p) => [...p, { id: pendId, url }]);
+      const pendKind: "video" | "channel" =
+        opts?.explicitChannel || looksLikeChannelUrl(url) ? "channel" : "video";
+      setPending((p) => [...p, { id: pendId, url, kind: pendKind }]);
       try {
         const result: IngestResult = opts?.explicitChannel
           ? { kind: "channel", value: await api.followChannel(url) }
@@ -564,6 +580,220 @@ function App() {
       });
     },
     [pushToast, recordUndo]
+  );
+
+  // -----------------------------------------------------------------------
+  // Playlists
+  // -----------------------------------------------------------------------
+
+  const handleCreatePlaylist = useCallback(
+    async (name: string): Promise<Playlist | null> => {
+      const clean = name.trim();
+      if (!clean) return null;
+      try {
+        const pl = await api.createPlaylist(clean);
+        await refreshPlaylists();
+        return pl;
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return null;
+      }
+    },
+    [pushToast, refreshPlaylists]
+  );
+
+  const handleDeletePlaylist = useCallback(
+    async (id: number) => {
+      const pl = playlists.find((p) => p.id === id);
+      if (!pl) return;
+      if (!confirm(`Delete playlist "${pl.name}"? (videos stay in your library)`))
+        return;
+      try {
+        await api.deletePlaylist(id);
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      if (filter.kind === "playlist" && filter.playlistId === id) {
+        setFilter({ kind: "all" });
+      }
+      // Drop the membership locally so cards update immediately.
+      setVideos((prev) =>
+        prev.map((v) =>
+          v.playlist_ids.includes(id)
+            ? { ...v, playlist_ids: v.playlist_ids.filter((p) => p !== id) }
+            : v
+        )
+      );
+      refreshPlaylists();
+      pushToast({ kind: "ok", text: `Deleted playlist "${pl.name}"` });
+    },
+    [filter, playlists, pushToast, refreshPlaylists]
+  );
+
+  const handleRenamePlaylist = useCallback(
+    async (id: number, name: string) => {
+      const clean = name.trim();
+      if (!clean) return;
+      try {
+        await api.renamePlaylist(id, clean);
+        refreshPlaylists();
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+      }
+    },
+    [pushToast, refreshPlaylists]
+  );
+
+  const handleAddVideosToPlaylist = useCallback(
+    async (videosArr: Video[], playlistId: number) => {
+      const pl = playlists.find((p) => p.id === playlistId);
+      const targets = videosArr.filter(
+        (v) => !v.playlist_ids.includes(playlistId)
+      );
+      if (targets.length === 0) return;
+      try {
+        await Promise.all(
+          targets.map((v) => api.addToPlaylist(playlistId, v.id))
+        );
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      const ids = new Set(targets.map((v) => v.id));
+      setVideos((prev) =>
+        prev.map((v) =>
+          ids.has(v.id)
+            ? { ...v, playlist_ids: [...v.playlist_ids, playlistId] }
+            : v
+        )
+      );
+      refreshPlaylists();
+      recordUndo(
+        `Added ${targets.length} to "${pl?.name ?? "playlist"}"`,
+        async () => {
+          await Promise.all(
+            targets.map((v) => api.removeFromPlaylist(playlistId, v.id))
+          );
+          setVideos((prev) =>
+            prev.map((v) =>
+              ids.has(v.id)
+                ? {
+                    ...v,
+                    playlist_ids: v.playlist_ids.filter((p) => p !== playlistId),
+                  }
+                : v
+            )
+          );
+          refreshPlaylists();
+        }
+      );
+    },
+    [playlists, pushToast, recordUndo, refreshPlaylists]
+  );
+
+  const handleRemoveVideosFromPlaylist = useCallback(
+    async (videosArr: Video[], playlistId: number) => {
+      const pl = playlists.find((p) => p.id === playlistId);
+      const targets = videosArr.filter((v) => v.playlist_ids.includes(playlistId));
+      if (targets.length === 0) return;
+      try {
+        await Promise.all(
+          targets.map((v) => api.removeFromPlaylist(playlistId, v.id))
+        );
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e) });
+        return;
+      }
+      const ids = new Set(targets.map((v) => v.id));
+      setVideos((prev) =>
+        prev.map((v) =>
+          ids.has(v.id)
+            ? {
+                ...v,
+                playlist_ids: v.playlist_ids.filter((p) => p !== playlistId),
+              }
+            : v
+        )
+      );
+      refreshPlaylists();
+      recordUndo(
+        `Removed ${targets.length} from "${pl?.name ?? "playlist"}"`,
+        async () => {
+          await Promise.all(
+            targets.map((v) => api.addToPlaylist(playlistId, v.id))
+          );
+          setVideos((prev) =>
+            prev.map((v) =>
+              ids.has(v.id)
+                ? { ...v, playlist_ids: [...v.playlist_ids, playlistId] }
+                : v
+            )
+          );
+          refreshPlaylists();
+        }
+      );
+    },
+    [playlists, pushToast, recordUndo, refreshPlaylists]
+  );
+
+  const handleDropVideoToPlaylist = useCallback(
+    (videoId: number, playlistId: number) => {
+      const v = videos.find((x) => x.id === videoId);
+      if (v) handleAddVideosToPlaylist([v], playlistId);
+    },
+    [videos, handleAddVideosToPlaylist]
+  );
+
+  // Dropping a URL onto a playlist: ingest the video into the library, then
+  // add it to the playlist. This is the "adding to a playlist auto-adds to
+  // the library" behavior.
+  const handleDropUrlToPlaylist = useCallback(
+    async (rawUrl: string, playlistId: number) => {
+      const url = normalizeYouTubeInput(rawUrl);
+      if (!url) {
+        pushToast({ kind: "err", text: "Only YouTube video URLs can go in a playlist" });
+        return;
+      }
+      const pendId = crypto.randomUUID();
+      setPending((p) => [...p, { id: pendId, url, kind: "video" }]);
+      try {
+        const result = await api.ingestUrl(url);
+        if (result.kind !== "video") {
+          pushToast({
+            kind: "err",
+            text: "That's a channel URL — drop a single video onto a playlist",
+          });
+          return;
+        }
+        let v = result.value;
+        if (settings.autoFavorite && !v.favorite) {
+          try {
+            await api.setFavorite(v.id, true);
+            v = { ...v, favorite: true };
+          } catch {
+            /* non-fatal */
+          }
+        }
+        await api.addToPlaylist(playlistId, v.id);
+        const withPlaylist = {
+          ...v,
+          playlist_ids: [...new Set([...v.playlist_ids, playlistId])],
+        };
+        insertVideoLocally(withPlaylist);
+        refreshPlaylists();
+        const pl = playlists.find((p) => p.id === playlistId);
+        pushToast({
+          kind: "ok",
+          text: `Added “${v.title.slice(0, 50)}” to ${pl?.name ?? "playlist"}`,
+        });
+      } catch (e) {
+        pushToast({ kind: "err", text: String(e).replace(/^Error: /, "") });
+      } finally {
+        setPending((p) => p.filter((x) => x.id !== pendId));
+      }
+    },
+    [insertVideoLocally, playlists, pushToast, refreshPlaylists, settings.autoFavorite]
   );
 
   const handleDeleteVideos = useCallback(
@@ -827,7 +1057,7 @@ function App() {
       // Show a "Fetching …" tracker at the top of the library list so the
       // user can see the add is in progress.
       const pendId = crypto.randomUUID();
-      setPending((p) => [...p, { id: pendId, url: cv.url }]);
+      setPending((p) => [...p, { id: pendId, url: cv.title, kind: "video" }]);
 
       let added: Video;
       try {
@@ -954,6 +1184,15 @@ function App() {
     const onDrop = (e: DragEvent) => {
       if (isInAppDrag(e)) {
         // Let sidebar drop targets handle it (or quietly ignore if dropped elsewhere).
+        return;
+      }
+      // A playlist row handles its own URL drops (ingest + add to playlist).
+      // The React handler on the row runs before this window handler, so by
+      // the time we get here it's already done — just reset overlay state.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-url-drop-target="true"]')) {
+        dragDepth.current = 0;
+        setDragHover(false);
         return;
       }
       e.preventDefault();
@@ -1163,7 +1402,7 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return videos.filter((v) => {
+    const matched = videos.filter((v) => {
       switch (filter.kind) {
         case "all":
           break;
@@ -1199,6 +1438,9 @@ function App() {
           if (!sameUrl && !sameId && !sameName) return false;
           break;
         }
+        case "playlist":
+          if (!v.playlist_ids.includes(filter.playlistId)) return false;
+          break;
       }
       if (!q) return true;
       const hay = [
@@ -1214,7 +1456,21 @@ function App() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [videos, channels, filter, search]);
+
+    // Sort. "added" = newest-added first (added_at). "uploaded" = newest
+    // YouTube upload first (upload_date YYYYMMDD as an integer; videos with
+    // no upload date sink to the bottom, then tiebreak by added_at).
+    const uploadKey = (v: Video): number =>
+      v.upload_date && /^\d{8}/.test(v.upload_date)
+        ? parseInt(v.upload_date.slice(0, 8), 10)
+        : 0;
+    if (sortMode === "uploaded") {
+      matched.sort((a, b) => uploadKey(b) - uploadKey(a) || b.added_at - a.added_at);
+    } else {
+      matched.sort((a, b) => b.added_at - a.added_at);
+    }
+    return matched;
+  }, [videos, channels, filter, search, sortMode]);
 
   const knownFolders = useMemo(() => {
     const s = new Set<string>();
@@ -1291,6 +1547,11 @@ function App() {
     if (filter.kind !== "channel") return null;
     return channels.find((c) => c.id === filter.channelId) ?? null;
   }, [channels, filter]);
+
+  const currentPlaylist = useMemo(() => {
+    if (filter.kind !== "playlist") return null;
+    return playlists.find((p) => p.id === filter.playlistId) ?? null;
+  }, [playlists, filter]);
 
   // ---------------------------------------------------------------------------
   // Top-of-app handlers
@@ -1436,6 +1697,7 @@ function App() {
         <Sidebar
           videos={videos}
           channels={channels}
+          playlists={playlists}
           inboxCount={inboxCount}
           filter={filter}
           onFilter={setFilter}
@@ -1443,6 +1705,11 @@ function App() {
           refreshing={refreshing}
           onFollowClick={() => setFollowOpen((x) => !x)}
           draggingVideo={draggingVideo}
+          onCreatePlaylist={(name) => handleCreatePlaylist(name)}
+          onRenamePlaylist={handleRenamePlaylist}
+          onDeletePlaylist={handleDeletePlaylist}
+          onDropVideoToPlaylist={handleDropVideoToPlaylist}
+          onDropUrlToPlaylist={handleDropUrlToPlaylist}
           onDropToFolder={(id, folder) => {
             const v = videos.find((x) => x.id === id);
             if (v) handleSetFolder(v, folder);
@@ -1510,9 +1777,23 @@ function App() {
             <div className="text-[11.5px] text-[var(--color-ink-faint)] hidden md:block">
               {kbd("K")} search · {kbd("V")} paste · {kbd("Z")} undo · Delete remove
             </div>
+            {filter.kind !== "inbox" && (
+              <label className="flex items-center gap-1.5 text-[11.5px] text-[var(--color-ink-faint)] shrink-0">
+                <span className="hidden lg:inline">Sort</span>
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as SortMode)}
+                  className="text-[12px] px-2 py-1 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] text-[var(--color-ink-dim)] focus:outline-none focus:border-[var(--color-accent)]"
+                  title="Sort order for the library list"
+                >
+                  <option value="added">Date added</option>
+                  <option value="uploaded">Upload date</option>
+                </select>
+              </label>
+            )}
             <button
               onClick={() => setAddOpen((x) => !x)}
-              className="text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition"
+              className="text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition shrink-0"
             >
               + Add URL
             </button>
@@ -1666,6 +1947,24 @@ function App() {
             </div>
           )}
 
+          {filter.kind === "playlist" && currentPlaylist && (
+            <div className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2 flex items-center gap-3">
+              <div className="text-[13px] flex-1 truncate">
+                <span className="font-semibold">{currentPlaylist.name}</span>
+                <span className="ml-2 text-[11.5px] text-[var(--color-ink-faint)]">
+                  {currentPlaylist.video_count}{" "}
+                  {currentPlaylist.video_count === 1 ? "video" : "videos"}
+                </span>
+              </div>
+              <button
+                onClick={() => handleDeletePlaylist(currentPlaylist.id)}
+                className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
+              >
+                Delete playlist
+              </button>
+            </div>
+          )}
+
           <div className="flex-1 min-h-0 flex">
             <section className="flex-1 min-w-0 overflow-y-auto">
               {pending.length > 0 && (
@@ -1675,8 +1974,11 @@ function App() {
                       key={p.id}
                       className="text-[12px] text-[var(--color-ink-dim)] px-3 py-2 rounded-md bg-[var(--color-surface)] border border-[var(--color-line)] flex items-center gap-2"
                     >
-                      <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" />
-                      <span className="truncate">Fetching {p.url}</span>
+                      <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
+                      <span className="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-accent)]/85">
+                        {p.kind === "channel" ? "Following" : "Adding"}
+                      </span>
+                      <span className="truncate">{p.url}</span>
                     </div>
                   ))}
                 </div>
@@ -1816,11 +2118,15 @@ function App() {
                     <MultiVideoDetails
                       videos={selectedVideos}
                       knownFolders={knownFolders}
+                      playlists={playlists}
                       onSetWatched={handleSetWatchedMany}
                       onSetFavorite={handleSetFavoriteMany}
                       onSetFolder={handleSetFolderMany}
                       onAddTag={handleAddTagMany}
                       onRemoveTag={handleRemoveTagMany}
+                      onAddToPlaylist={handleAddVideosToPlaylist}
+                      onRemoveFromPlaylist={handleRemoveVideosFromPlaylist}
+                      onCreatePlaylist={handleCreatePlaylist}
                       onDeleteAll={handleDeleteVideos}
                       onClearSelection={clearSelection}
                     />
@@ -1831,6 +2137,7 @@ function App() {
                       video={selectedVideo}
                       knownFolders={knownFolders}
                       followedChannels={channels}
+                      playlists={playlists}
                       onAddTag={handleAddTag}
                       onRemoveTag={handleRemoveTag}
                       onSetFolder={handleSetFolder}
@@ -1839,6 +2146,9 @@ function App() {
                       onOpen={handleOpenAndMarkWatched}
                       onRequestDelete={() => handleDeleteVideo(selectedVideo)}
                       onFollowChannel={handleFollowChannelFromVideo}
+                      onAddToPlaylist={(vids, pid) => handleAddVideosToPlaylist(vids, pid)}
+                      onRemoveFromPlaylist={(vids, pid) => handleRemoveVideosFromPlaylist(vids, pid)}
+                      onCreatePlaylist={handleCreatePlaylist}
                     />
                   </div>
                 ) : (
@@ -1992,6 +2302,20 @@ function EmptyState({
       <CenteredEmpty
         title="No favorites yet"
         body="Hover a video and tap the ★ on its thumbnail, or use the star button in the details panel. Anything you star will live here."
+      />
+    );
+  }
+
+  if (filter.kind === "playlist") {
+    return (
+      <CenteredEmpty
+        title={q ? "No matches in this playlist" : "This playlist is empty"}
+        body={
+          q
+            ? `Nothing in this playlist matches “${q}”.`
+            : "Drag videos onto this playlist in the sidebar, drop a video URL onto it, or use “Add to playlist” in a video's details."
+        }
+        action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
       />
     );
   }
