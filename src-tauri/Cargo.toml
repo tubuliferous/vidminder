@@ -1,6 +1,6 @@
 [package]
 name = "vidminder"
-version = "0.2.2"
+version = "0.2.3"
 description = "VidMinder - drop URLs, keep a calm pool of videos to watch later"
 authors = ["VidMinder"]
 edition = "2021"
@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

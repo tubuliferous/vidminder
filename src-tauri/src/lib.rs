@@ -954,9 +954,31 @@ fn spawn_background_refresh(app: AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // single-instance MUST come first per plugin docs. With the `deep-link`
+        // feature on, it also forwards URLs from a second-launch into the
+        // running instance's deep-link plugin (so drag-onto-icon while the app
+        // is already open still ingests instead of opening a duplicate).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // On Linux & on Windows-dev, URL scheme registration must be done
+            // at runtime. Production Windows installers (MSI/NSIS) handle it
+            // via the bundle config. macOS handles it via Info.plist at bundle
+            // time, so no runtime call needed there.
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+
             let database = db::open_db().expect("opening database");
             app.manage(database);
             app.manage(Arc::new(RefreshLock::default()));

@@ -1233,6 +1233,34 @@ function App() {
     return () => window.removeEventListener("paste", onPaste);
   }, [ingest]);
 
+  // OS-level URL drops onto the app icon (Dock on macOS, taskbar on Windows
+  // for pinned apps, launcher on Linux best-effort). `onOpenUrl` fires
+  // whenever the OS hands us a URL while we're running; `getCurrent` returns
+  // any URLs the OS handed us at launch (e.g. cold-launch from a dock drop).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { onOpenUrl, getCurrent } = await import(
+        "@tauri-apps/plugin-deep-link"
+      );
+      const fn = await onOpenUrl((urls) => {
+        for (const u of urls) ingest(u);
+      });
+      if (cancelled) fn();
+      else unlisten = fn;
+      const initial = await getCurrent();
+      if (initial && !cancelled) for (const u of initial) ingest(u);
+    })().catch(() => {
+      // Plugin missing or no permission — non-fatal, drag-on-icon just won't
+      // work in this build.
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [ingest]);
+
   const selectedVideos = useMemo(
     () => videos.filter((v) => selectedIds.has(v.id)),
     [videos, selectedIds]
