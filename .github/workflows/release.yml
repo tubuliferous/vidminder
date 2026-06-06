@@ -33,7 +33,11 @@ jobs:
             sidecar_name: "yt-dlp-aarch64-apple-darwin"
             sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           - name: "macOS (Intel)"
-            runner: "macos-13"
+            # Cross-compile the Intel build on an Apple Silicon runner. Native
+            # Intel runners (macos-13) are being retired and are scarce; the
+            # macOS toolchain is universal, so an arm64 host links x86_64 fine
+            # given the Rust target (installed below) and `--target` flag.
+            runner: "macos-latest"
             target: "x86_64-apple-darwin"
             args: "--target x86_64-apple-darwin --bundles app"
             sidecar_name: "yt-dlp-x86_64-apple-darwin"

@@ -11,6 +11,7 @@ An elegant, lightweight desktop app for collecting YouTube videos into a calm po
 | --- | --- |
 | **Windows** | [Installer (.exe)](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-windows-setup.exe) · [MSI](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-windows.msi) |
 | **macOS (Apple Silicon)** | [`.app.zip`](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-macos-arm64.app.zip) |
+| **macOS (Intel)** | [`.app.zip`](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-macos-intel.app.zip) |
 | **Linux** | [AppImage](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.AppImage) · [.deb](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.deb) · [.rpm](https://github.com/tubuliferous/vidminder/releases/latest/download/VidMinder-linux.rpm) |
 
 All links point to the **latest release** automatically — bookmark them and they'll keep working as new versions ship. Browse every version at the [releases page](https://github.com/tubuliferous/vidminder/releases).
