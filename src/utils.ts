@@ -228,6 +228,26 @@ export function withAutoplay(rawUrl: string): string {
   }
 }
 
+/// Generate a transient id (used as a React key for the pending-add tracker).
+/// `crypto.randomUUID` only exists on Safari 15.4+, so on older WebKit — which
+/// the Intel/Monterey builds must support — we fall back to a v4 UUID built
+/// from `crypto.getRandomValues` (Safari ~6+), then to a non-crypto string.
+/// These ids are never persisted or security-sensitive.
+export function uid(): string {
+  const c = typeof crypto !== "undefined" ? crypto : undefined;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const b = c.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, "0"));
+    return `${h.slice(0, 4).join("")}-${h.slice(4, 6).join("")}-${h
+      .slice(6, 8)
+      .join("")}-${h.slice(8, 10).join("")}-${h.slice(10, 16).join("")}`;
+  }
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export const DRAG_MIME = "application/x-vidminder-video";
 
 export function extractUrlFromDrop(e: React.DragEvent | DragEvent): string | null {

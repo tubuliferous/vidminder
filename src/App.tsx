@@ -25,6 +25,7 @@ import {
   recencyBucket,
   RECENCY_LABELS,
   RECENCY_ORDER,
+  uid,
 } from "./utils";
 import { useSettings } from "./settings";
 import { kbd, kbdClick, shiftClick } from "./platform";
@@ -325,7 +326,7 @@ function App() {
         });
         return;
       }
-      const pendId = crypto.randomUUID();
+      const pendId = uid();
       const pendKind: "video" | "channel" =
         opts?.explicitChannel || looksLikeChannelUrl(url) ? "channel" : "video";
       setPending((p) => [...p, { id: pendId, url, kind: pendKind }]);
@@ -644,7 +645,7 @@ function App() {
         pushToast({ kind: "err", text: "Only YouTube URLs can be added by drag-drop" });
         return;
       }
-      const pendId = crypto.randomUUID();
+      const pendId = uid();
       setPending((p) => [...p, { id: pendId, url, kind: "video" }]);
       try {
         const result = await api.ingestUrl(url);
@@ -949,7 +950,7 @@ function App() {
       );
       // Show a "Fetching …" tracker at the top of the library list so the
       // user can see the add is in progress.
-      const pendId = crypto.randomUUID();
+      const pendId = uid();
       setPending((p) => [...p, { id: pendId, url: cv.title, kind: "video" }]);
 
       let added: Video;
