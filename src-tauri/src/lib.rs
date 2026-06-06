@@ -10,16 +10,49 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
 const INITIAL_REFRESH_DELAY_SECS: u64 = 8;
-// Pull deep enough to cover at least the last month for typical channels.
-// High-frequency channels (multiple uploads per day) may still get cut off,
-// but most weekly/monthly channels' full month of uploads fits within 50.
-const PER_CHANNEL_MAX_ENTRIES: usize = 50;
-const RECENT_WINDOW_SECS: i64 = 14 * 24 * 60 * 60;
+// The channel "load videos" lookback window. Default is 2 weeks; the user can
+// raise it (up to 10 years) via the Settings dialog, which pushes the value to
+// `AppConfig` through the `set_channel_lookback_days` command. It governs which
+// of a channel's videos are surfaced (not pre-dismissed) at follow time, the
+// catch-up resurface cutoff, and how deep the follow/catch-up fetch goes.
+const DEFAULT_LOOKBACK_SECS: i64 = 14 * 24 * 60 * 60;
+// Per-video timestamp verification (one yt-dlp call each) is expensive, so we
+// bound it to a fixed recent window regardless of how large the lookback is.
+// Videos older than this keep yt-dlp's approximate dates — accurate enough for
+// display/sorting; exact dates only matter for the recent inbox buckets.
+const ENRICH_WINDOW_SECS: i64 = 14 * 24 * 60 * 60;
+// The background poll only needs enough entries to catch new uploads; it never
+// scales with the lookback (that would re-crawl years of listings every poll).
+const REFRESH_MAX_ENTRIES: usize = 50;
 
-fn is_recent(timestamp: Option<i64>) -> bool {
+/// Runtime-configurable channel settings, set from the frontend and held as
+/// managed Tauri state so every channel command can read it without threading
+/// the value through each signature.
+struct AppConfig {
+    /// Channel video lookback window, in seconds. Defaults to 2 weeks.
+    lookback_secs: std::sync::atomic::AtomicI64,
+}
+
+/// Current lookback window (seconds), falling back to the default if unset.
+fn lookback_secs(app: &AppHandle) -> i64 {
+    app.try_state::<AppConfig>()
+        .map(|c| c.lookback_secs.load(std::sync::atomic::Ordering::Relaxed))
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_LOOKBACK_SECS)
+}
+
+/// How many channel entries to fetch to fill a given lookback window. Scales
+/// roughly with the window (assuming up to ~3 uploads/day) but stays bounded so
+/// even a 10-year setting can't trigger an unbounded flat-playlist crawl.
+fn max_entries_for_window(window_secs: i64) -> usize {
+    let days = (window_secs / 86_400).max(1);
+    days.saturating_mul(3).clamp(50, 2000) as usize
+}
+
+fn is_recent(timestamp: Option<i64>, window_secs: i64) -> bool {
     let Some(ts) = timestamp else { return false };
     let now = now_secs();
-    ts > 0 && (now - ts) <= RECENT_WINDOW_SECS
+    ts > 0 && (now - ts) <= window_secs
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -163,8 +196,8 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
     Ok(v)
 }
 
-async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
-    let mut listing = ytdlp::fetch_channel_listing(url, PER_CHANNEL_MAX_ENTRIES)
+async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult<Channel> {
+    let mut listing = ytdlp::fetch_channel_listing(url, max_entries_for_window(window_secs))
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
@@ -201,9 +234,9 @@ async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
         }
     };
 
-    // Seed channel videos. Videos uploaded within the last RECENT_WINDOW_SECS
-    // land in the inbox (dismissed=false); older ones are pre-dismissed so the
-    // inbox doesn't flood with months of backlog.
+    // Seed channel videos. Videos uploaded within the lookback window land in
+    // the inbox (dismissed=false); older ones are pre-dismissed so the inbox
+    // doesn't flood with backlog beyond what the user asked to load.
     {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
         for entry in &listing.entries {
@@ -226,7 +259,7 @@ async fn follow_channel_inner(url: &str, db: &Db) -> AppResult<Channel> {
                     duration: entry.duration.map(|d| d.round() as i64),
                     upload_date: entry.upload_date.as_deref(),
                     upload_timestamp: ts,
-                    dismissed: !is_recent(ts),
+                    dismissed: !is_recent(ts, window_secs),
                 },
             );
         }
@@ -274,7 +307,7 @@ async fn ingest_url(
     validate_youtube_url(&url)?;
 
     if ytdlp::looks_like_channel_url(&url) {
-        let ch = follow_channel_inner(&url, &db).await?;
+        let ch = follow_channel_inner(&url, &db, lookback_secs(&app)).await?;
         let _ = app.emit("channels-changed", ());
         return Ok(IngestResult::Channel(ch));
     }
@@ -295,7 +328,7 @@ async fn follow_channel(
         return Err(AppError::Generic("empty URL".into()));
     }
     validate_youtube_url(&url)?;
-    let ch = follow_channel_inner(&url, &db).await?;
+    let ch = follow_channel_inner(&url, &db, lookback_secs(&app)).await?;
     let _ = app.emit("channels-changed", ());
     Ok(ch)
 }
@@ -504,7 +537,7 @@ async fn enrich_timestamps(
                 return None;
             }
             if let Some(ts) = e.timestamp {
-                if ts > 0 && (now - ts) > RECENT_WINDOW_SECS {
+                if ts > 0 && (now - ts) > ENRICH_WINDOW_SECS {
                     return None;
                 }
             }
@@ -554,6 +587,7 @@ async fn catch_up_channel(
     channel_id: i64,
     app: AppHandle,
 ) -> AppResult<CatchUpSummary> {
+    let window = lookback_secs(&app);
     // First refresh the channel's listing so we have upload_timestamp populated
     // for any older entries that were seeded before timestamps were captured.
     let ch_url: String = {
@@ -565,7 +599,7 @@ async fn catch_up_channel(
             .url
     };
 
-    let mut listing = ytdlp::fetch_channel_listing(&ch_url, PER_CHANNEL_MAX_ENTRIES)
+    let mut listing = ytdlp::fetch_channel_listing(&ch_url, max_entries_for_window(window))
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
@@ -597,9 +631,9 @@ async fn catch_up_channel(
                 }
             }
         }
-        // Resurface step (aggressive): un-dismiss + un-see every entry in the
-        // last RECENT_WINDOW_SECS for this channel — even ones the user
-        // explicitly dismissed.
+        // Resurface step (aggressive): un-dismiss + un-see every entry within
+        // the lookback window for this channel — even ones the user explicitly
+        // dismissed.
         // Backfill timestamps for any entries we already know about.
         for entry in &listing.entries {
             let Some(ext_id) = entry.id.as_deref() else {
@@ -631,7 +665,7 @@ async fn catch_up_channel(
                 surfaced_now += 1;
             }
         }
-        let cutoff = now_secs() - RECENT_WINDOW_SECS;
+        let cutoff = now_secs() - window;
         let resurfaced = db::resurface_channel_recent(&conn, channel_id, cutoff)
             .map_err(|e| AppError::Generic(format!("{e:#}")))?;
         surfaced_now += resurfaced as usize;
@@ -643,6 +677,22 @@ async fn catch_up_channel(
     Ok(CatchUpSummary {
         surfaced: surfaced_now,
     })
+}
+
+/// Set the channel "load videos" lookback window (in days). Pushed from the
+/// frontend settings on startup and whenever the user changes it. `days <= 0`
+/// resets to the default. Stored in-memory; the frontend re-pushes on launch.
+#[tauri::command]
+fn set_channel_lookback_days(days: i64, config: State<'_, AppConfig>) -> AppResult<()> {
+    let secs = if days <= 0 {
+        DEFAULT_LOOKBACK_SECS
+    } else {
+        days.saturating_mul(86_400)
+    };
+    config
+        .lookback_secs
+        .store(secs, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -847,7 +897,7 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
             let url = ch.url.clone();
             let ext_id = ch.channel_id.clone();
             let ch_id = ch.id;
-            let result = ytdlp::fetch_channel_listing(&url, PER_CHANNEL_MAX_ENTRIES).await;
+            let result = ytdlp::fetch_channel_listing(&url, REFRESH_MAX_ENTRIES).await;
             match result {
                 Ok(mut listing) => {
                     let db = handle.state::<Db>();
@@ -928,8 +978,8 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
         }
 
         // After timestamp backfills, surface anything the original "pre-dismiss
-        // at follow" behavior had hidden that's still within the last 30 days.
-        let cutoff = now_secs() - RECENT_WINDOW_SECS;
+        // at follow" behavior had hidden that's still within the lookback window.
+        let cutoff = now_secs() - lookback_secs(app);
         let n = db::catch_up_all_channels(&conn, cutoff)
             .map_err(|e| AppError::Generic(format!("{e:#}")))?;
         summary.new_videos += n as usize;
@@ -988,6 +1038,9 @@ pub fn run() {
             let database = db::open_db().expect("opening database");
             app.manage(database);
             app.manage(Arc::new(RefreshLock::default()));
+            app.manage(AppConfig {
+                lookback_secs: std::sync::atomic::AtomicI64::new(DEFAULT_LOOKBACK_SECS),
+            });
             spawn_background_refresh(app.handle().clone());
             Ok(())
         })
@@ -1007,6 +1060,7 @@ pub fn run() {
             add_inbox_to_library,
             refresh_channels,
             catch_up_channel,
+            set_channel_lookback_days,
             list_videos,
             delete_video,
             restore_video,

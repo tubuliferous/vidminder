@@ -8,12 +8,16 @@ export type Settings = {
   /// How often the app polls followed channels for new uploads, in minutes.
   /// 0 disables auto-polling — the user can still hit Refresh manually.
   pollIntervalMinutes: number;
+  /// How far back to load a channel's videos when populating saved channels,
+  /// in days. Default 14 (2 weeks); larger values pull more upload history.
+  channelLookbackDays: number;
 };
 
 const DEFAULTS: Settings = {
   theme: "auto",
   autoFavorite: false,
   pollIntervalMinutes: 30,
+  channelLookbackDays: 14,
 };
 
 export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [
@@ -23,6 +27,20 @@ export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string
   { value: 180, label: "Every 3 hours", hint: "Once or twice during a typical session" },
   { value: 360, label: "Every 6 hours", hint: "Mostly passive" },
   { value: 0, label: "Manual only", hint: "Never poll automatically — Refresh button only" },
+];
+
+/// How far back to load a channel's videos, in days. Default is 2 weeks (the
+/// shortest); longer windows pull more history but take longer to load and only
+/// apply when you follow a channel or run Catch up.
+export const CHANNEL_LOOKBACK_PRESETS: { value: number; label: string; hint: string }[] = [
+  { value: 14, label: "2 weeks", hint: "Default — just the latest uploads" },
+  { value: 30, label: "1 month", hint: "A little more backlog" },
+  { value: 90, label: "3 months", hint: "A season of uploads" },
+  { value: 180, label: "6 months", hint: "Half a year of uploads" },
+  { value: 365, label: "1 year", hint: "A full year of history" },
+  { value: 730, label: "2 years", hint: "Deeper backfill — slower to load" },
+  { value: 1825, label: "5 years", hint: "Most of a channel's history" },
+  { value: 3650, label: "10 years", hint: "As far back as practical — slowest to load" },
 ];
 
 const STORAGE_KEY = "vidminder.settings.v1";

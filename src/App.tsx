@@ -218,6 +218,12 @@ function App() {
     return () => clearInterval(id);
   }, [settings.pollIntervalMinutes]);
 
+  // Push the channel lookback window to the backend on startup and whenever it
+  // changes, so following a channel / Catch up uses the user's chosen depth.
+  useEffect(() => {
+    api.setChannelLookbackDays(settings.channelLookbackDays).catch(() => {});
+  }, [settings.channelLookbackDays]);
+
   // Backend events (e.g. background polling brought in new inbox items)
   useEffect(() => {
     const ul1 = listen("videos-changed", () => refreshVideos());

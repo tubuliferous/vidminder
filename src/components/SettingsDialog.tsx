@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { Settings, Theme } from "../settings";
-import { POLL_INTERVAL_PRESETS } from "../settings";
+import { CHANNEL_LOOKBACK_PRESETS, POLL_INTERVAL_PRESETS } from "../settings";
 import { kbd } from "../platform";
 
 type Props = {
@@ -111,6 +111,32 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
           <div className="text-[11.5px] text-ink-faint mt-1">
             {POLL_INTERVAL_PRESETS.find(
               (p) => p.value === settings.pollIntervalMinutes
+            )?.hint ?? ""}
+          </div>
+        </section>
+
+        <section className="mt-6 pt-5 border-t border-line">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
+            Channel history
+          </div>
+          <select
+            value={settings.channelLookbackDays}
+            onChange={(e) =>
+              onChange({ channelLookbackDays: parseInt(e.target.value, 10) })
+            }
+            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+          >
+            {CHANNEL_LOOKBACK_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <div className="text-[11.5px] text-ink-faint mt-1">
+            How far back to load a channel's videos — applies when you follow a
+            channel or run Catch up.{" "}
+            {CHANNEL_LOOKBACK_PRESETS.find(
+              (p) => p.value === settings.channelLookbackDays
             )?.hint ?? ""}
           </div>
         </section>

@@ -81,6 +81,10 @@ export async function catchUpChannel(channelId: number): Promise<CatchUpSummary>
   return await invoke<CatchUpSummary>("catch_up_channel", { channelId });
 }
 
+export async function setChannelLookbackDays(days: number): Promise<void> {
+  await invoke("set_channel_lookback_days", { days });
+}
+
 export async function listVideos(): Promise<Video[]> {
   return await invoke<Video[]>("list_videos");
 }
