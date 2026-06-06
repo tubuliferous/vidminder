@@ -32,17 +32,17 @@ export function InboxRow({
       className={
         "flex gap-3 p-2.5 rounded-md border transition group " +
         (showNewBadge
-          ? "bg-[var(--color-surface)] border-[var(--color-line)] hover:border-[var(--color-line-soft)]"
-          : "bg-[var(--color-surface)]/60 border-[var(--color-line)]/50 hover:border-[var(--color-line-soft)]")
+          ? "bg-surface border-line hover:border-line-soft"
+          : "bg-surface/60 border-line/50 hover:border-line-soft")
       }
     >
       <div
         onDoubleClick={onOpen}
-        className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-[var(--color-surface-2)] cursor-pointer"
+        className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-surface-2 cursor-pointer"
         title="Double-click to play in browser (marks as seen)"
       >
         {showNewBadge && (
-          <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[1px] rounded bg-[var(--color-accent)] text-black shadow-sm">
+          <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[1px] rounded bg-accent text-black shadow-sm">
             New
           </span>
         )}
@@ -55,7 +55,7 @@ export function InboxRow({
             loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--color-ink-faint)] text-xs">
+          <div className="w-full h-full flex items-center justify-center text-ink-faint text-xs">
             no preview
           </div>
         )}
@@ -69,26 +69,26 @@ export function InboxRow({
         <div
           className={
             "text-[13.5px] leading-snug line-clamp-2 cursor-pointer " +
-            (isUnseen ? "font-semibold" : "font-normal text-[var(--color-ink-dim)]")
+            (isUnseen ? "font-semibold" : "font-normal text-ink-dim")
           }
           onDoubleClick={onOpen}
         >
           {cv.title}
         </div>
-        <div className="mt-1 text-[11.5px] text-[var(--color-ink-dim)] truncate">
+        <div className="mt-1 text-[11.5px] text-ink-dim truncate">
           {showChannelName && (
             <>
               <button
                 onClick={() => api.openInBrowser(cv.channel_url)}
-                className="text-[var(--color-ink-dim)] hover:text-[var(--color-accent)] hover:underline transition-colors"
+                className="text-ink-dim hover:text-accent hover:underline transition-colors"
                 title={`Open ${cv.channel_name} on YouTube`}
               >
                 {cv.channel_name}
               </button>
-              <span className="mx-1.5 text-[var(--color-ink-faint)]">·</span>
+              <span className="mx-1.5 text-ink-faint">·</span>
             </>
           )}
-          <span className="text-[var(--color-ink-faint)]">
+          <span className="text-ink-faint">
             {formatUploadDate(cv.upload_date, "short", cv.upload_timestamp) ||
               "Unknown date"}
           </span>
@@ -97,20 +97,20 @@ export function InboxRow({
           <button
             onClick={onAdd}
             disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 disabled:opacity-50 transition"
+            className="text-[12px] px-2.5 py-1 rounded-md bg-accent text-black hover:brightness-110 disabled:opacity-50 transition"
           >
             {busy ? "Adding…" : "+ Add to list"}
           </button>
           <button
             onClick={onDismiss}
             disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] disabled:opacity-50 transition"
+            className="text-[12px] px-2.5 py-1 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 transition"
           >
             Dismiss
           </button>
           <button
             onClick={onOpen}
-            className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] ml-1 transition"
+            className="text-[11.5px] text-ink-faint hover:text-ink-dim ml-1 transition"
           >
             play in browser
           </button>

@@ -103,11 +103,11 @@ function Section({
   const showContent = !collapsible || expanded;
   return (
     <div className="mb-5">
-      <div className="px-3 mb-1.5 flex items-center justify-between text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)]">
+      <div className="px-3 mb-1.5 flex items-center justify-between text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint">
         {collapsible ? (
           <button
             onClick={toggle}
-            className="flex items-center gap-1 hover:text-[var(--color-ink-dim)] transition group"
+            className="flex items-center gap-1 hover:text-ink-dim transition group"
             title={expanded ? "Collapse" : "Expand"}
           >
             <Chevron expanded={expanded} />
@@ -218,12 +218,12 @@ function Row({
       className={
         "group flex items-center justify-between text-left text-[13px] rounded-md mx-1.5 px-2 py-[5px] transition-colors " +
         (hover
-          ? "bg-[var(--color-accent)] text-black ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]"
+          ? "bg-accent text-black ring-2 ring-accent ring-offset-2 ring-offset-surface"
           : active
-          ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
+          ? "bg-accent-dim text-ink"
           : drag
-          ? "text-[var(--color-ink-dim)] bg-[var(--color-surface-2)]/40 outline-dashed outline-2 outline-[var(--color-accent)]/55 outline-offset-[-3px]"
-          : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
+          ? "text-ink-dim bg-surface-2/40 outline-dashed outline-2 outline-accent/55 outline-offset-[-3px]"
+          : "text-ink-dim hover:bg-surface-2 hover:text-ink")
       }
     >
       {/* pointer-events-none on children so dragenter/leave only fire on the
@@ -235,7 +235,7 @@ function Row({
           <span
             className={
               "text-[10px] tabular-nums px-1.5 py-[1px] rounded-full font-semibold " +
-              (hover ? "bg-black/20 text-black" : "bg-[var(--color-accent)] text-black")
+              (hover ? "bg-black/20 text-black" : "bg-accent text-black")
             }
           >
             {badge}
@@ -248,8 +248,8 @@ function Row({
               (hover
                 ? "text-black/70"
                 : active
-                ? "text-[var(--color-ink-dim)]"
-                : "text-[var(--color-ink-faint)]")
+                ? "text-ink-dim"
+                : "text-ink-faint")
             }
           >
             {count}
@@ -287,10 +287,10 @@ export function Sidebar({
   const isActive = (f: Filter) => JSON.stringify(f) === JSON.stringify(filter);
 
   return (
-    <aside className="w-[228px] shrink-0 h-full flex flex-col border-r border-[var(--color-line)] bg-[var(--color-surface)]">
+    <aside className="w-[228px] shrink-0 h-full flex flex-col border-r border-line bg-surface">
       <div className="flex-1 overflow-y-auto py-4">
         <div className="px-4 mb-4 flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[var(--color-accent)]" />
+          <div className="w-2 h-2 rounded-full bg-accent" />
           <span className="text-[15px] font-semibold tracking-tight">VidMinder</span>
         </div>
 
@@ -352,10 +352,10 @@ export function Sidebar({
                 className={
                   "text-[10px] uppercase tracking-wider transition-colors min-w-[42px] text-right " +
                   (refreshing
-                    ? "text-[var(--color-accent)] cursor-default"
+                    ? "text-accent cursor-default"
                     : channels.length === 0
-                    ? "text-[var(--color-ink-faint)]/40 cursor-not-allowed"
-                    : "text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]")
+                    ? "text-ink-faint/40 cursor-not-allowed"
+                    : "text-ink-faint hover:text-ink")
                 }
                 title="Check followed channels for new videos"
               >
@@ -363,7 +363,7 @@ export function Sidebar({
               </button>
               <button
                 onClick={onFollowClick}
-                className="w-[14px] h-[14px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
+                className="w-[14px] h-[14px] p-0 rounded-full bg-surface-2 text-ink-dim hover:bg-accent hover:text-black transition inline-flex items-center justify-center shrink-0"
                 title="Follow a channel"
               >
                 <PlusIcon />
@@ -372,8 +372,8 @@ export function Sidebar({
           }
         >
           {channels.length === 0 ? (
-            <div className="px-3 text-[11.5px] text-[var(--color-ink-faint)] leading-snug">
-              Click <span className="text-[var(--color-ink-dim)]">+</span> to follow a channel by URL, or use “Follow this channel” on any video.
+            <div className="px-3 text-[11.5px] text-ink-faint leading-snug">
+              Click <span className="text-ink-dim">+</span> to follow a channel by URL, or use “Follow this channel” on any video.
             </div>
           ) : (
             <ChannelList
@@ -432,14 +432,14 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-[var(--color-line)] px-3 py-2 flex items-center justify-between">
-        <span className="text-[10.5px] text-[var(--color-ink-faint)]">
+      <div className="shrink-0 border-t border-line px-3 py-2 flex items-center justify-between">
+        <span className="text-[10.5px] text-ink-faint">
           {kbd(",")} to open settings
         </span>
         <button
           onClick={onOpenSettings}
           title={`Settings (${kbd(",")})`}
-          className="w-7 h-7 rounded-md text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition flex items-center justify-center"
+          className="w-7 h-7 rounded-md text-ink-faint hover:text-ink hover:bg-surface-2 transition flex items-center justify-center"
         >
           <GearIcon />
         </button>
@@ -530,7 +530,7 @@ function CategoryGroup({
     <div className="mt-1">
       <button
         onClick={toggle}
-        className="w-full flex items-center gap-1 text-left text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] mx-1.5 px-2 py-[3px] rounded transition-colors group"
+        className="w-full flex items-center gap-1 text-left text-[11.5px] text-ink-faint hover:text-ink-dim mx-1.5 px-2 py-[3px] rounded transition-colors group"
       >
         <Chevron expanded={expanded} />
         <span className="font-medium tracking-tight">{title}</span>
@@ -587,7 +587,7 @@ function ChannelRow({
           }}
           onBlur={commit}
           placeholder={`Category for ${channel.name}`}
-          className="flex-1 text-[12.5px] px-2 py-[2px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="flex-1 text-[12.5px] px-2 py-[2px] rounded bg-canvas border border-line focus:outline-none focus:border-accent"
         />
       </div>
     );
@@ -607,8 +607,8 @@ function ChannelRow({
       className={
         "group flex items-center justify-between text-left text-[13px] rounded-md mx-1.5 px-2 py-[5px] transition-colors cursor-pointer " +
         (active
-          ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
-          : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
+          ? "bg-accent-dim text-ink"
+          : "text-ink-dim hover:bg-surface-2 hover:text-ink")
       }
     >
       <span className="truncate flex-1">{channel.name}</span>
@@ -620,19 +620,19 @@ function ChannelRow({
               ? `Category: ${channel.category} — click to edit`
               : "Set a category"
           }
-          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
+          className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-accent transition"
         >
           <TagIcon />
         </button>
         <button
           onClick={openOnYouTube}
           title={`Open ${channel.name} on YouTube`}
-          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
+          className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-accent transition"
         >
           <ExternalLinkIcon />
         </button>
         {channel.inbox_count > 0 && (
-          <span className="text-[10px] tabular-nums px-1.5 py-[1px] rounded-full bg-[var(--color-accent)] text-black font-semibold">
+          <span className="text-[10px] tabular-nums px-1.5 py-[1px] rounded-full bg-accent text-black font-semibold">
             {channel.inbox_count}
           </span>
         )}
@@ -872,17 +872,17 @@ function TagContextMenu({
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       style={{ position: "fixed", left: x, top: y, zIndex: 1000 }}
-      className="min-w-[160px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px]"
+      className="min-w-[160px] rounded-md border border-line bg-surface shadow-xl py-1 text-[12.5px]"
     >
       <button
         onClick={() => onRename(path)}
-        className="block w-full text-left px-3 py-1.5 text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+        className="block w-full text-left px-3 py-1.5 text-ink-dim hover:bg-surface-2 hover:text-ink"
       >
         Rename…
       </button>
       <button
         onClick={() => onDelete(path)}
-        className="block w-full text-left px-3 py-1.5 text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)]"
+        className="block w-full text-left px-3 py-1.5 text-ink-dim hover:bg-surface-2 hover:text-danger"
       >
         Delete tag + sub-tags
       </button>
@@ -950,7 +950,7 @@ function TagNodeRow({
           }}
           onBlur={() => onCommitRename(draft)}
           onClick={(e) => e.stopPropagation()}
-          className="w-full text-[12.5px] px-2 py-[2px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full text-[12.5px] px-2 py-[2px] rounded bg-canvas border border-line focus:outline-none focus:border-accent"
         />
       </div>
     );
@@ -1003,12 +1003,12 @@ function TagNodeRow({
       className={
         "group flex items-center text-left text-[13px] rounded-md mx-1.5 pr-2 py-[5px] gap-1 transition-colors cursor-pointer " +
         (hover
-          ? "bg-[var(--color-accent)] text-black ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]"
+          ? "bg-accent text-black ring-2 ring-accent ring-offset-2 ring-offset-surface"
           : isActive
-          ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
+          ? "bg-accent-dim text-ink"
           : draggingVideo
-          ? "text-[var(--color-ink-dim)] bg-[var(--color-surface-2)]/40 outline-dashed outline-2 outline-[var(--color-accent)]/55 outline-offset-[-3px]"
-          : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
+          ? "text-ink-dim bg-surface-2/40 outline-dashed outline-2 outline-accent/55 outline-offset-[-3px]"
+          : "text-ink-dim hover:bg-surface-2 hover:text-ink")
       }
     >
       <button
@@ -1039,7 +1039,7 @@ function TagNodeRow({
       <span
         className={
           "text-[11px] tabular-nums shrink-0 " +
-          (hover ? "text-black/70" : "text-[var(--color-ink-faint)]")
+          (hover ? "text-black/70" : "text-ink-faint")
         }
       >
         {node.total}

@@ -90,10 +90,10 @@ export function InboxView({
 
   return (
     <div className="h-full overflow-y-auto">
-      <header className="sticky top-0 z-10 bg-[var(--color-canvas)]/95 backdrop-blur border-b border-[var(--color-line)] px-5 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-10 bg-canvas/95 backdrop-blur border-b border-line px-5 py-3 flex items-center justify-between">
         <div>
           <div className="text-[15px] font-semibold">Inbox</div>
-          <div className="text-[12px] text-[var(--color-ink-dim)]">
+          <div className="text-[12px] text-ink-dim">
             {isFiltered
               ? `${items.length} match${items.length === 1 ? "" : "es"} of ${totalItems}`
               : items.length === 0
@@ -111,15 +111,15 @@ export function InboxView({
               onClick={onDismissAll}
               disabled={dismissingAll}
               className={
-                "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors inline-flex items-center gap-1.5 min-w-[112px] justify-center " +
+                "text-[12.5px] px-3 py-1.5 rounded-md border border-line transition-colors inline-flex items-center gap-1.5 min-w-[112px] justify-center " +
                 (dismissingAll
-                  ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
-                  : "text-[var(--color-ink-dim)] hover:text-[var(--color-danger)] hover:border-[var(--color-danger)]/60")
+                  ? "text-ink-faint bg-surface-2 cursor-default"
+                  : "text-ink-dim hover:text-danger hover:border-danger/60")
               }
               title="Dismiss every item currently in your inbox"
             >
               {dismissingAll && (
-                <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-ink-dim)] border-t-transparent animate-spin shrink-0" />
+                <span className="inline-block w-3 h-3 rounded-full border-2 border-ink-dim border-t-transparent animate-spin shrink-0" />
               )}
               <span>{dismissingAll ? "Dismissing" : "Dismiss all"}</span>
             </button>
@@ -128,14 +128,14 @@ export function InboxView({
             onClick={onRefresh}
             disabled={refreshing}
             className={
-              "text-[12.5px] px-3 py-1.5 rounded-md border border-[var(--color-line)] transition-colors flex items-center gap-2 min-w-[112px] justify-center " +
+              "text-[12.5px] px-3 py-1.5 rounded-md border border-line transition-colors flex items-center gap-2 min-w-[112px] justify-center " +
               (refreshing
-                ? "text-[var(--color-ink-faint)] bg-[var(--color-surface-2)] cursor-default"
-                : "text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+                ? "text-ink-faint bg-surface-2 cursor-default"
+                : "text-ink-dim hover:text-ink hover:bg-surface-2")
             }
           >
             {refreshing && (
-              <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
+              <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin shrink-0" />
             )}
             <span>{refreshing ? "Checking" : "Check now"}</span>
           </button>
@@ -148,12 +148,12 @@ export function InboxView({
             {isFiltered ? (
               <>
                 <div className="text-[15px] font-semibold mb-1.5">No inbox matches</div>
-                <div className="text-[12.5px] text-[var(--color-ink-dim)]">
+                <div className="text-[12.5px] text-ink-dim">
                   Nothing in your inbox matches “{searchQuery}”.
                 </div>
                 <button
                   onClick={onClearSearch}
-                  className="mt-4 text-[12.5px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition"
+                  className="mt-4 text-[12.5px] px-3 py-1.5 rounded-md bg-accent text-black hover:brightness-110 transition"
                 >
                   Clear search
                 </button>
@@ -163,16 +163,16 @@ export function InboxView({
                 <div className="text-[16px] font-semibold mb-2">
                   Follow a channel to start
                 </div>
-                <div className="text-[13px] text-[var(--color-ink-dim)] max-w-md leading-relaxed">
+                <div className="text-[13px] text-ink-dim max-w-md leading-relaxed">
                   Use “Follow this channel” on any video, or paste a channel URL like{" "}
-                  <code className="text-[var(--color-ink)]">youtube.com/@SomeChannel</code> into the
+                  <code className="text-ink">youtube.com/@SomeChannel</code> into the
                   Add URL field. VidMinder checks for new uploads every 30 minutes.
                 </div>
               </>
             ) : (
               <>
                 <div className="text-[15px] font-semibold mb-1.5">All caught up</div>
-                <div className="text-[12.5px] text-[var(--color-ink-dim)]">
+                <div className="text-[12.5px] text-ink-dim">
                   Following {channels.length} {channels.length === 1 ? "channel" : "channels"} — no new uploads.
                 </div>
               </>
@@ -183,16 +183,16 @@ export function InboxView({
         <div className="pb-5">
           {grouped.map(({ bucket, videos }) => (
             <section key={bucket} className="mb-4">
-              <div className="sticky top-[57px] z-[5] bg-[var(--color-canvas)]/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-[var(--color-line)]/60">
+              <div className="sticky top-[57px] z-[5] bg-canvas/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-line/60">
                 <div className="flex items-baseline gap-3">
                   <h3 className="text-[13px] font-semibold tracking-tight">
                     {RECENCY_LABELS[bucket]}
                   </h3>
-                  <span className="text-[11px] text-[var(--color-ink-faint)] tabular-nums">
+                  <span className="text-[11px] text-ink-faint tabular-nums">
                     {videos.length}
                   </span>
                 </div>
-                <span className="text-[11px] text-[var(--color-ink-faint)] hidden sm:block">
+                <span className="text-[11px] text-ink-faint hidden sm:block">
                   {BUCKET_HINTS[bucket]}
                 </span>
               </div>

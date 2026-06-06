@@ -37,19 +37,19 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-w-[92vw] rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] shadow-2xl p-6"
+        className="w-[520px] max-w-[92vw] rounded-xl border border-line bg-surface shadow-2xl p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-[16px] font-semibold leading-none">Settings</h2>
-            <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
+            <div className="text-[11.5px] text-ink-faint mt-1">
               {kbd(",")} to open · Esc to close
             </div>
           </div>
           <button
             onClick={onClose}
-            className="w-7 h-7 rounded-md text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
+            className="w-7 h-7 rounded-md text-ink-faint hover:text-ink hover:bg-surface-2 transition"
             title="Close"
           >
             ✕
@@ -57,7 +57,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
         </div>
 
         <section className="space-y-2">
-          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)]">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint">
             Appearance
           </div>
           <div className="grid grid-cols-3 gap-2">
@@ -70,19 +70,19 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
                   className={
                     "rounded-lg border px-3 py-2.5 text-left transition " +
                     (active
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent-dim)]/40"
-                      : "border-[var(--color-line)] hover:border-[var(--color-line-soft)] hover:bg-[var(--color-surface-2)]")
+                      ? "border-accent bg-accent-dim/40"
+                      : "border-line hover:border-line-soft hover:bg-surface-2")
                   }
                 >
                   <div
                     className={
                       "text-[13px] font-medium " +
-                      (active ? "text-[var(--color-ink)]" : "text-[var(--color-ink-dim)]")
+                      (active ? "text-ink" : "text-ink-dim")
                     }
                   >
                     {t.label}
                   </div>
-                  <div className="text-[11px] text-[var(--color-ink-faint)] mt-0.5">
+                  <div className="text-[11px] text-ink-faint mt-0.5">
                     {t.hint}
                   </div>
                 </button>
@@ -91,8 +91,8 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
           </div>
         </section>
 
-        <section className="mt-6 pt-5 border-t border-[var(--color-line)]">
-          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-2">
+        <section className="mt-6 pt-5 border-t border-line">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
             Channel polling
           </div>
           <select
@@ -100,7 +100,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
             onChange={(e) =>
               onChange({ pollIntervalMinutes: parseInt(e.target.value, 10) })
             }
-            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
           >
             {POLL_INTERVAL_PRESETS.map((p) => (
               <option key={p.value} value={p.value}>
@@ -108,15 +108,15 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
               </option>
             ))}
           </select>
-          <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
+          <div className="text-[11.5px] text-ink-faint mt-1">
             {POLL_INTERVAL_PRESETS.find(
               (p) => p.value === settings.pollIntervalMinutes
             )?.hint ?? ""}
           </div>
         </section>
 
-        <section className="mt-6 pt-5 border-t border-[var(--color-line)]">
-          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-2">
+        <section className="mt-6 pt-5 border-t border-line">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
             Library
           </div>
           <label className="flex items-start gap-3 cursor-pointer">
@@ -124,22 +124,22 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
               type="checkbox"
               checked={settings.autoFavorite}
               onChange={(e) => onChange({ autoFavorite: e.target.checked })}
-              className="mt-0.5 w-4 h-4 accent-[var(--color-accent)]"
+              className="mt-0.5 w-4 h-4 accent-accent"
             />
             <span>
               <span className="text-[13px] block">Auto-favorite added videos</span>
-              <span className="text-[11.5px] text-[var(--color-ink-faint)]">
+              <span className="text-[11.5px] text-ink-faint">
                 Star every video automatically when it's added (from drops, paste, or the inbox).
               </span>
             </span>
           </label>
         </section>
 
-        <section className="mt-6 pt-5 border-t border-[var(--color-line)] text-[11.5px] text-[var(--color-ink-faint)] leading-relaxed">
-          <div className="font-semibold text-[var(--color-ink-dim)] mb-1">Tips</div>
+        <section className="mt-6 pt-5 border-t border-line text-[11.5px] text-ink-faint leading-relaxed">
+          <div className="font-semibold text-ink-dim mb-1">Tips</div>
           <ul className="list-disc pl-4 space-y-0.5">
             <li>Drop a video URL anywhere to add it to your list.</li>
-            <li>Drop a channel URL (<code className="text-[var(--color-ink-dim)]">youtube.com/@channel</code>) to follow it.</li>
+            <li>Drop a channel URL (<code className="text-ink-dim">youtube.com/@channel</code>) to follow it.</li>
             <li>Drag videos onto a folder, tag, or Favorites in the sidebar.</li>
             <li>{kbd("Z")} undoes any change · Delete removes the highlighted video.</li>
           </ul>

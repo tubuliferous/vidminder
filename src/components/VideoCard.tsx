@@ -47,11 +47,11 @@ export function VideoCard({
       className={
         "group flex gap-3 px-3 py-2.5 cursor-pointer border-l-2 transition-colors " +
         (selected
-          ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]"
-          : "border-transparent hover:bg-[var(--color-surface)]")
+          ? "bg-surface-2 border-accent"
+          : "border-transparent hover:bg-surface")
       }
     >
-      <div className="relative shrink-0 w-[148px] h-[83px] rounded-md overflow-hidden bg-[var(--color-surface-2)]">
+      <div className="relative shrink-0 w-[148px] h-[83px] rounded-md overflow-hidden bg-surface-2">
         {video.thumbnail_url ? (
           <img
             src={video.thumbnail_url}
@@ -63,7 +63,7 @@ export function VideoCard({
             loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--color-ink-faint)] text-xs">
+          <div className="w-full h-full flex items-center justify-center text-ink-faint text-xs">
             no preview
           </div>
         )}
@@ -93,19 +93,19 @@ export function VideoCard({
         <div
           className={
             "text-[14px] font-medium leading-snug line-clamp-2 " +
-            (video.watched ? "text-[var(--color-ink-dim)]" : "text-[var(--color-ink)]")
+            (video.watched ? "text-ink-dim" : "text-ink")
           }
         >
           {video.title}
         </div>
-        <div className="mt-1 text-[12px] text-[var(--color-ink-dim)] truncate">
+        <div className="mt-1 text-[12px] text-ink-dim truncate">
           {video.channel_url && video.uploader ? (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 api.openInBrowser(video.channel_url!);
               }}
-              className="hover:text-[var(--color-accent)] hover:underline transition-colors"
+              className="hover:text-accent hover:underline transition-colors"
               title={`Open ${video.uploader} on YouTube`}
             >
               {video.uploader}
@@ -115,18 +115,18 @@ export function VideoCard({
           )}
           {video.upload_date && (
             <>
-              <span className="mx-1.5 text-[var(--color-ink-faint)]">·</span>
+              <span className="mx-1.5 text-ink-faint">·</span>
               <span
-                className="text-[var(--color-ink-faint)]"
+                className="text-ink-faint"
                 title={`Uploaded ${formatUploadDate(video.upload_date, "full")}`}
               >
                 {formatUploadDate(video.upload_date, "short")}
               </span>
             </>
           )}
-          <span className="mx-1.5 text-[var(--color-ink-faint)]">·</span>
+          <span className="mx-1.5 text-ink-faint">·</span>
           <span
-            className="text-[var(--color-ink-faint)]"
+            className="text-ink-faint"
             title={`Added on ${new Date(video.added_at * 1000).toLocaleString()}`}
           >
             added {formatAddedAt(video.added_at)}
@@ -135,20 +135,20 @@ export function VideoCard({
         {(video.folder || video.user_tags.length > 0 || video.category) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {video.folder && (
-              <span className="text-[10.5px] px-1.5 py-[1px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-[var(--color-line)]">
+              <span className="text-[10.5px] px-1.5 py-[1px] rounded bg-surface-2 text-ink-dim border border-line">
                 {video.folder}
               </span>
             )}
             {video.user_tags.slice(0, 4).map((t) => (
               <span
                 key={t}
-                className="text-[10.5px] px-1.5 py-[1px] rounded bg-[var(--color-accent-dim)]/40 text-[var(--color-accent)]"
+                className="text-[10.5px] px-1.5 py-[1px] rounded bg-accent-dim/40 text-accent"
               >
                 #{t}
               </span>
             ))}
             {video.category && !video.user_tags.includes(video.category) && (
-              <span className="text-[10.5px] text-[var(--color-ink-faint)]">{video.category}</span>
+              <span className="text-[10.5px] text-ink-faint">{video.category}</span>
             )}
           </div>
         )}

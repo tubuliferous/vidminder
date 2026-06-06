@@ -178,19 +178,19 @@ export function SearchPalette({
       onClick={onClose}
     >
       <div
-        className="w-[640px] max-w-[92vw] rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] shadow-2xl flex flex-col overflow-hidden"
+        className="w-[640px] max-w-[92vw] rounded-xl border border-line bg-surface shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-4 py-3 border-b border-[var(--color-line)] flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-line flex items-center gap-2">
           <SearchIcon />
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search library + channel inbox by title, uploader, tag…"
-            className="flex-1 text-[14px] bg-transparent outline-none placeholder:text-[var(--color-ink-faint)]"
+            className="flex-1 text-[14px] bg-transparent outline-none placeholder:text-ink-faint"
           />
-          <span className="text-[11px] text-[var(--color-ink-faint)] hidden md:inline">
+          <span className="text-[11px] text-ink-faint hidden md:inline">
             ↑↓ navigate · ↵ open · esc close
           </span>
         </div>
@@ -199,7 +199,7 @@ export function SearchPalette({
           {query.trim() === "" ? (
             <EmptyHint videos={videos} inboxCount={channelVideos.length} />
           ) : results.length === 0 ? (
-            <div className="px-5 py-8 text-center text-[12.5px] text-[var(--color-ink-dim)]">
+            <div className="px-5 py-8 text-center text-[12.5px] text-ink-dim">
               Nothing matches “{query.trim()}”
             </div>
           ) : (
@@ -242,7 +242,7 @@ function EmptyHint({
   inboxCount: number;
 }) {
   return (
-    <div className="px-5 py-8 text-center text-[12.5px] text-[var(--color-ink-dim)]">
+    <div className="px-5 py-8 text-center text-[12.5px] text-ink-dim">
       {videos.length === 0 && inboxCount === 0
         ? "Your library is empty"
         : `Search ${videos.length} library ${
@@ -297,11 +297,11 @@ function ResultRow({
       className={
         "px-4 py-2 flex gap-3 cursor-pointer border-l-2 transition-colors " +
         (active
-          ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]"
-          : "border-transparent hover:bg-[var(--color-surface-2)]/60")
+          ? "bg-surface-2 border-accent"
+          : "border-transparent hover:bg-surface-2/60")
       }
     >
-      <div className="relative shrink-0 w-[88px] h-[50px] rounded overflow-hidden bg-[var(--color-canvas)]">
+      <div className="relative shrink-0 w-[88px] h-[50px] rounded overflow-hidden bg-canvas">
         {thumb ? (
           <img
             src={thumb}
@@ -311,7 +311,7 @@ function ResultRow({
             className={"w-full h-full object-cover " + (watched ? "opacity-50" : "")}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--color-ink-faint)] text-[10px]">
+          <div className="w-full h-full flex items-center justify-center text-ink-faint text-[10px]">
             no preview
           </div>
         )}
@@ -325,27 +325,27 @@ function ResultRow({
         <div className="text-[13px] leading-snug line-clamp-2">
           <Highlight text={title} query={query} />
         </div>
-        <div className="mt-0.5 text-[11.5px] text-[var(--color-ink-dim)] truncate flex items-center gap-1.5">
+        <div className="mt-0.5 text-[11.5px] text-ink-dim truncate flex items-center gap-1.5">
           {uploader && (
             <>
               <span>{uploader}</span>
-              <span className="text-[var(--color-ink-faint)]">·</span>
+              <span className="text-ink-faint">·</span>
             </>
           )}
           {uploadDate && (
             <>
-              <span className="text-[var(--color-ink-faint)]">
+              <span className="text-ink-faint">
                 {formatUploadDate(uploadDate, "short")}
               </span>
-              <span className="text-[var(--color-ink-faint)]">·</span>
+              <span className="text-ink-faint">·</span>
             </>
           )}
-          <span className="text-[10.5px] uppercase tracking-wider text-[var(--color-accent)]/85">
+          <span className="text-[10.5px] uppercase tracking-wider text-accent/85">
             {sourceLabel[hit.match]}
           </span>
           {isInbox && (
             <span
-              className="text-[9.5px] uppercase tracking-wider px-1.5 py-[1px] rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+              className="text-[9.5px] uppercase tracking-wider px-1.5 py-[1px] rounded bg-accent/15 text-accent"
               title="From a followed channel's inbox — not yet in your library"
             >
               Inbox
@@ -355,7 +355,7 @@ function ResultRow({
         {hit.kind === "library" &&
           hit.match === "description" &&
           hit.video.description && (
-            <div className="mt-1 text-[11.5px] text-[var(--color-ink-faint)] line-clamp-1">
+            <div className="mt-1 text-[11.5px] text-ink-faint line-clamp-1">
               <Highlight
                 text={excerptAround(hit.video.description, query)}
                 query={query}
@@ -393,7 +393,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
     parts.push(
       <mark
         key={idx}
-        className="bg-[var(--color-accent)]/25 text-[var(--color-ink)] rounded px-[1px]"
+        className="bg-accent/25 text-ink rounded px-[1px]"
       >
         {text.slice(idx, idx + needle.length)}
       </mark>
@@ -414,7 +414,7 @@ function SearchIcon() {
       strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="text-[var(--color-ink-faint)]"
+      className="text-ink-faint"
     >
       <circle cx="11" cy="11" r="8" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />

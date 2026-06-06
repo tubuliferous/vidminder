@@ -55,7 +55,7 @@ export function VideoDetails({
   };
 
   return (
-    <div className="h-full overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-surface)] flex flex-col">
+    <div className="h-full overflow-y-auto border-l border-line bg-surface flex flex-col">
       <div className="aspect-video w-full bg-black relative shrink-0">
         {video.thumbnail_url ? (
           <img
@@ -65,7 +65,7 @@ export function VideoDetails({
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-[var(--color-ink-faint)] text-sm">
+          <div className="w-full h-full flex items-center justify-center text-ink-faint text-sm">
             no preview
           </div>
         )}
@@ -84,12 +84,12 @@ export function VideoDetails({
       <div className="p-5 space-y-5">
         <div>
           <h2 className="text-[16px] font-semibold leading-snug">{video.title}</h2>
-          <div className="mt-1.5 text-[12.5px] text-[var(--color-ink-dim)] flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="mt-1.5 text-[12.5px] text-ink-dim flex flex-wrap items-center gap-x-2 gap-y-1">
             {video.uploader && (
               video.channel_url ? (
                 <button
                   onClick={() => api.openInBrowser(video.channel_url!)}
-                  className="hover:text-[var(--color-accent)] hover:underline transition-colors"
+                  className="hover:text-accent hover:underline transition-colors"
                   title={`Open ${video.uploader} on YouTube`}
                 >
                   {video.uploader}
@@ -98,23 +98,23 @@ export function VideoDetails({
                 <span>{video.uploader}</span>
               )
             )}
-            {video.uploader && <span className="text-[var(--color-ink-faint)]">·</span>}
+            {video.uploader && <span className="text-ink-faint">·</span>}
             <span>{video.source}</span>
             {video.duration ? (
               <>
-                <span className="text-[var(--color-ink-faint)]">·</span>
+                <span className="text-ink-faint">·</span>
                 <span>{formatDuration(video.duration)}</span>
               </>
             ) : null}
           </div>
-          <div className="mt-1 text-[11.5px] text-[var(--color-ink-faint)] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <div className="mt-1 text-[11.5px] text-ink-faint flex flex-wrap items-center gap-x-2 gap-y-0.5">
             {video.upload_date && (
               <span title={`Uploaded ${formatUploadDate(video.upload_date)}`}>
                 Uploaded {formatUploadDate(video.upload_date)}
               </span>
             )}
             {video.upload_date && (
-              <span className="text-[var(--color-ink-faint)]/60">·</span>
+              <span className="text-ink-faint/60">·</span>
             )}
             <span
               title={`Added on ${new Date(video.added_at * 1000).toLocaleString()}`}
@@ -125,14 +125,14 @@ export function VideoDetails({
           {(canFollow || isFollowed) && (
             <div className="mt-2.5">
               {isFollowed ? (
-                <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[var(--color-ink-faint)]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
+                <span className="inline-flex items-center gap-1.5 text-[11.5px] text-ink-faint">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent" />
                   Following {video.uploader || "channel"}
                 </span>
               ) : (
                 <button
                   onClick={() => onFollowChannel(video)}
-                  className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-accent)]/40 text-[var(--color-accent)] hover:bg-[var(--color-accent-dim)]/40 transition"
+                  className="text-[12px] px-2.5 py-1 rounded-md border border-accent/40 text-accent hover:bg-accent-dim/40 transition"
                 >
                   + Follow {video.uploader ?? "this channel"}
                 </button>
@@ -144,7 +144,7 @@ export function VideoDetails({
         <div className="flex gap-2">
           <button
             onClick={() => onOpen(video)}
-            className="flex-1 text-[13px] font-medium py-2 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition"
+            className="flex-1 text-[13px] font-medium py-2 rounded-md bg-accent text-black hover:brightness-110 transition"
           >
             Play in browser
           </button>
@@ -153,8 +153,8 @@ export function VideoDetails({
             className={
               "text-[13px] py-2 px-3 rounded-md border transition " +
               (video.watched
-                ? "border-[var(--color-line)] bg-[var(--color-surface-2)] text-[var(--color-ink-dim)]"
-                : "border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+                ? "border-line bg-surface-2 text-ink-dim"
+                : "border-line text-ink-dim hover:text-ink hover:bg-surface-2")
             }
             title={video.watched ? "Mark unwatched" : "Mark watched"}
           >
@@ -163,7 +163,7 @@ export function VideoDetails({
         </div>
 
         <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
             Folder
           </label>
           {editingFolder ? (
@@ -182,7 +182,7 @@ export function VideoDetails({
                   }
                 }}
                 placeholder="No folder"
-                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
               />
               <datalist id="folders-list">
                 {knownFolders.map((f) => (
@@ -191,7 +191,7 @@ export function VideoDetails({
               </datalist>
               <button
                 onClick={saveFolder}
-                className="text-[12px] px-2.5 rounded-md bg-[var(--color-surface-2)] hover:bg-[var(--color-line)]"
+                className="text-[12px] px-2.5 rounded-md bg-surface-2 hover:bg-line"
               >
                 Save
               </button>
@@ -199,10 +199,10 @@ export function VideoDetails({
           ) : (
             <button
               onClick={() => setEditingFolder(true)}
-              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] hover:border-[var(--color-line-soft)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
+              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line hover:border-line-soft text-ink-dim hover:text-ink"
             >
               {video.folder || (
-                <span className="text-[var(--color-ink-faint)]">No folder — click to set</span>
+                <span className="text-ink-faint">No folder — click to set</span>
               )}
             </button>
           )}
@@ -212,32 +212,32 @@ export function VideoDetails({
 
         {video.description && (
           <div>
-            <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+            <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
               Description
             </label>
-            <p className="selectable text-[12.5px] leading-relaxed text-[var(--color-ink-dim)] whitespace-pre-wrap line-clamp-[14]">
+            <p className="selectable text-[12.5px] leading-relaxed text-ink-dim whitespace-pre-wrap line-clamp-[14]">
               {video.description}
             </p>
           </div>
         )}
 
         {video.category && (
-          <div className="text-[12px] text-[var(--color-ink-faint)]">
-            <span className="text-[var(--color-ink-faint)]">Category: </span>
-            <span className="text-[var(--color-ink-dim)]">{video.category}</span>
+          <div className="text-[12px] text-ink-faint">
+            <span className="text-ink-faint">Category: </span>
+            <span className="text-ink-dim">{video.category}</span>
           </div>
         )}
 
         {video.raw_tags.length > 0 && (
           <details className="text-[12px]">
-            <summary className="cursor-pointer text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] select-none">
+            <summary className="cursor-pointer text-ink-faint hover:text-ink-dim select-none">
               Source tags ({video.raw_tags.length})
             </summary>
             <div className="mt-1.5 flex flex-wrap gap-1">
               {video.raw_tags.map((t) => (
                 <span
                   key={t}
-                  className="text-[11px] px-1.5 py-[1px] rounded text-[var(--color-ink-faint)] bg-[var(--color-surface-2)]"
+                  className="text-[11px] px-1.5 py-[1px] rounded text-ink-faint bg-surface-2"
                 >
                   {t}
                 </span>
@@ -246,10 +246,10 @@ export function VideoDetails({
           </details>
         )}
 
-        <div className="pt-2 border-t border-[var(--color-line)]">
+        <div className="pt-2 border-t border-line">
           <button
             onClick={onRequestDelete}
-            className="text-[12px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
+            className="text-[12px] text-ink-faint hover:text-danger transition"
           >
             Remove from library
           </button>
@@ -350,22 +350,22 @@ function TagEditor({
 
   return (
     <div>
-      <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+      <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
         Tags
       </label>
       <div className="flex flex-wrap gap-1.5 mb-2">
         {video.user_tags.length === 0 && (
-          <span className="text-[12px] text-[var(--color-ink-faint)]">No tags yet</span>
+          <span className="text-[12px] text-ink-faint">No tags yet</span>
         )}
         {video.user_tags.map((t) => (
           <span
             key={t}
-            className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-accent-dim)]/40 text-[var(--color-accent)]"
+            className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-accent-dim/40 text-accent"
           >
             #{t}
             <button
               onClick={() => commitTags(video.user_tags.filter((x) => x !== t))}
-              className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+              className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
               title="Remove tag"
             >
               ×
@@ -414,10 +414,10 @@ function TagEditor({
             setTimeout(() => draft.trim() && addFromDraft(), 120);
           }}
           placeholder={`Add a tag — “a.b” for nesting (${kbd("T")} to focus)`}
-          className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
         />
         {suggestions.length > 0 && (
-          <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
+          <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-line bg-surface shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
             {suggestions.map((s, i) => (
               <li
                 key={s}
@@ -429,8 +429,8 @@ function TagEditor({
                 className={
                   "px-2.5 py-1 cursor-pointer " +
                   (i === hi
-                    ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
-                    : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)]")
+                    ? "bg-accent-dim text-ink"
+                    : "text-ink-dim hover:bg-surface-2")
                 }
               >
                 {s}

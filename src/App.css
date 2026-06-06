@@ -1,45 +1,53 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  --color-canvas: #0e1014;
-  --color-surface: #161922;
-  --color-surface-2: #1d2230;
-  --color-line: #262b39;
-  --color-line-soft: #2e3445;
-  --color-ink: #e8eaf0;
-  --color-ink-dim: #9ba1b3;
-  --color-ink-faint: #6b7080;
-  --color-accent: #6aa9ff;
-  --color-accent-dim: #2a4a7a;
-  --color-danger: #ff7a8a;
+/* Color tokens are stored as space-separated RGB channels (not hex) so that
+   Tailwind's `<alpha-value>` and our own `rgb(var(--x) / a)` references work on
+   older WebKit — e.g. macOS Monterey's Safari — which lacks color-mix(),
+   @property, and cascade-layer support. Tailwind v4 relied on those and the
+   whole stylesheet collapsed on old Intel Macs; v3 + these channels render
+   everywhere back to Safari 12.1. The default (no data-theme) matches dark. */
+:root {
+  --color-canvas: 14 16 20;
+  --color-surface: 22 25 34;
+  --color-surface-2: 29 34 48;
+  --color-line: 38 43 57;
+  --color-line-soft: 46 52 69;
+  --color-ink: 232 234 240;
+  --color-ink-dim: 155 161 179;
+  --color-ink-faint: 107 112 128;
+  --color-accent: 106 169 255;
+  --color-accent-dim: 42 74 122;
+  --color-danger: 255 122 138;
 }
 
 :root[data-theme="dark"] {
-  --color-canvas: #0e1014;
-  --color-surface: #161922;
-  --color-surface-2: #1d2230;
-  --color-line: #262b39;
-  --color-line-soft: #2e3445;
-  --color-ink: #e8eaf0;
-  --color-ink-dim: #9ba1b3;
-  --color-ink-faint: #6b7080;
-  --color-accent: #6aa9ff;
-  --color-accent-dim: #2a4a7a;
-  --color-danger: #ff7a8a;
+  --color-canvas: 14 16 20;
+  --color-surface: 22 25 34;
+  --color-surface-2: 29 34 48;
+  --color-line: 38 43 57;
+  --color-line-soft: 46 52 69;
+  --color-ink: 232 234 240;
+  --color-ink-dim: 155 161 179;
+  --color-ink-faint: 107 112 128;
+  --color-accent: 106 169 255;
+  --color-accent-dim: 42 74 122;
+  --color-danger: 255 122 138;
 }
 
 :root[data-theme="light"] {
-  --color-canvas: #f5f6f9;
-  --color-surface: #ffffff;
-  --color-surface-2: #eef1f6;
-  --color-line: #dfe3eb;
-  --color-line-soft: #cfd5e0;
-  --color-ink: #181c25;
-  --color-ink-dim: #555b69;
-  --color-ink-faint: #8a91a1;
-  --color-accent: #2a6ed1;
-  --color-accent-dim: #d4e3f7;
-  --color-danger: #cf2f4a;
+  --color-canvas: 245 246 249;
+  --color-surface: 255 255 255;
+  --color-surface-2: 238 241 246;
+  --color-line: 223 227 235;
+  --color-line-soft: 207 213 224;
+  --color-ink: 24 28 37;
+  --color-ink-dim: 85 91 105;
+  --color-ink-faint: 138 145 161;
+  --color-accent: 42 110 209;
+  --color-accent-dim: 212 227 247;
+  --color-danger: 207 47 74;
 }
 
 :root {
@@ -48,8 +56,8 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: var(--color-ink);
-  background-color: var(--color-canvas);
+  color: rgb(var(--color-ink));
+  background-color: rgb(var(--color-canvas));
 
   /* App-shell text is unselectable by default, matching native desktop apps.
      Opt-in selection for descriptions, inputs, and explicitly tagged content
@@ -90,8 +98,8 @@ body,
 
 body {
   overflow: hidden;
-  background-color: var(--color-canvas);
-  color: var(--color-ink);
+  background-color: rgb(var(--color-canvas));
+  color: rgb(var(--color-ink));
 }
 
 button {
@@ -103,11 +111,11 @@ button {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-ink) 22%, transparent);
+  background: rgb(var(--color-ink) / 0.22);
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-ink) 38%, transparent);
+  background: rgb(var(--color-ink) / 0.38);
 }
 ::-webkit-scrollbar-track {
   background: transparent;

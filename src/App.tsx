@@ -1686,7 +1686,7 @@ function App() {
         />
 
         <main className="flex-1 min-w-0 flex flex-col">
-          <header className="h-12 shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface)] flex items-center px-4 gap-3">
+          <header className="h-12 shrink-0 border-b border-line bg-surface flex items-center px-4 gap-3">
             <input
               type="search"
               value={search}
@@ -1696,18 +1696,18 @@ function App() {
                   ? "Search inbox by title, channel, or date…"
                   : "Search title, description, uploader, tags…"
               }
-              className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+              className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
             />
-            <div className="text-[11.5px] text-[var(--color-ink-faint)] hidden md:block">
+            <div className="text-[11.5px] text-ink-faint hidden md:block">
               {kbd("K")} search · {kbd("V")} paste · {kbd("Z")} undo · Delete remove
             </div>
             {filter.kind !== "inbox" && (
-              <label className="flex items-center gap-1.5 text-[11.5px] text-[var(--color-ink-faint)] shrink-0">
+              <label className="flex items-center gap-1.5 text-[11.5px] text-ink-faint shrink-0">
                 <span className="hidden lg:inline">Sort</span>
                 <select
                   value={sortMode}
                   onChange={(e) => setSortMode(e.target.value as SortMode)}
-                  className="text-[12px] px-2 py-1 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] text-[var(--color-ink-dim)] focus:outline-none focus:border-[var(--color-accent)]"
+                  className="text-[12px] px-2 py-1 rounded-md bg-canvas border border-line text-ink-dim focus:outline-none focus:border-accent"
                   title="Sort order for the library list"
                 >
                   <option value="added">Date added</option>
@@ -1717,14 +1717,14 @@ function App() {
             )}
             <button
               onClick={() => setAddOpen((x) => !x)}
-              className="text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition shrink-0"
+              className="text-[13px] px-3 py-1.5 rounded-md bg-accent text-black hover:brightness-110 transition shrink-0"
             >
               + Add URL
             </button>
           </header>
 
           {addOpen && (
-            <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2.5 flex gap-2">
+            <div className="border-b border-line bg-surface px-4 py-2.5 flex gap-2">
               <input
                 autoFocus
                 type="text"
@@ -1738,11 +1738,11 @@ function App() {
                   }
                 }}
                 placeholder="Video URL, channel URL, @handle, or channel ID"
-                className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+                className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
               />
               <button
                 onClick={submitAdd}
-                className="text-[13px] px-3 rounded-md bg-[var(--color-surface-2)] hover:bg-[var(--color-line)]"
+                className="text-[13px] px-3 rounded-md bg-surface-2 hover:bg-line"
               >
                 Add
               </button>
@@ -1750,7 +1750,7 @@ function App() {
           )}
 
           {followOpen && (
-            <div className="border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2.5 flex gap-2">
+            <div className="border-b border-line bg-surface px-4 py-2.5 flex gap-2">
               <input
                 autoFocus
                 type="text"
@@ -1764,11 +1764,11 @@ function App() {
                   }
                 }}
                 placeholder="Channel URL, @handle, or just a channel name"
-                className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+                className="flex-1 text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
               />
               <button
                 onClick={submitFollow}
-                className="text-[13px] px-3 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110"
+                className="text-[13px] px-3 rounded-md bg-accent text-black hover:brightness-110"
               >
                 Follow
               </button>
@@ -1776,7 +1776,7 @@ function App() {
           )}
 
           {filter.kind === "channel" && currentChannel && (
-            <div className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2 flex items-center gap-3">
+            <div className="shrink-0 border-b border-line bg-surface px-4 py-2 flex items-center gap-3">
               {currentChannel.thumbnail_url && (
                 <img
                   src={currentChannel.thumbnail_url}
@@ -1788,12 +1788,12 @@ function App() {
               <div className="text-[13px] flex-1 truncate">
                 <button
                   onClick={() => api.openInBrowser(currentChannel.url)}
-                  className="font-semibold hover:text-[var(--color-accent)] hover:underline transition-colors"
+                  className="font-semibold hover:text-accent hover:underline transition-colors"
                   title={`Open ${currentChannel.name} on YouTube`}
                 >
                   {currentChannel.name}
                 </button>
-                <span className="ml-2 text-[11.5px] text-[var(--color-ink-faint)]">
+                <span className="ml-2 text-[11.5px] text-ink-faint">
                   {currentChannel.inbox_count > 0
                     ? `${currentChannel.inbox_count} new in inbox`
                     : "no new uploads"}
@@ -1805,15 +1805,15 @@ function App() {
                 className={
                   "text-[11.5px] transition inline-flex items-center gap-1.5 " +
                   (resurfacingChannelId === currentChannel.id
-                    ? "text-[var(--color-accent)] cursor-default"
+                    ? "text-accent cursor-default"
                     : resurfacingChannelId !== null
-                    ? "text-[var(--color-ink-faint)]/40 cursor-not-allowed"
-                    : "text-[var(--color-accent)] hover:brightness-125")
+                    ? "text-ink-faint/40 cursor-not-allowed"
+                    : "text-accent hover:brightness-125")
                 }
                 title="Re-check this channel and bring every upload from the last 2 weeks back into the inbox — even ones you dismissed"
               >
                 {resurfacingChannelId === currentChannel.id && (
-                  <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" />
+                  <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-accent border-t-transparent animate-spin" />
                 )}
                 <span>
                   {resurfacingChannelId === currentChannel.id
@@ -1848,15 +1848,15 @@ function App() {
                     className={
                       "text-[11.5px] transition inline-flex items-center gap-1.5 " +
                       (busy
-                        ? "text-[var(--color-ink-dim)] cursor-default"
+                        ? "text-ink-dim cursor-default"
                         : bulkDismissingScope !== null || channelInbox.length === 0
-                        ? "text-[var(--color-ink-faint)]/40 cursor-not-allowed"
-                        : "text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]")
+                        ? "text-ink-faint/40 cursor-not-allowed"
+                        : "text-ink-faint hover:text-ink")
                     }
                     title="Dismiss every new inbox item from this channel"
                   >
                     {busy && (
-                      <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-[var(--color-ink-dim)] border-t-transparent animate-spin" />
+                      <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-ink-dim border-t-transparent animate-spin" />
                     )}
                     <span>{busy ? "Dismissing…" : "Dismiss all"}</span>
                   </button>
@@ -1864,7 +1864,7 @@ function App() {
               })()}
               <button
                 onClick={() => handleUnfollow(currentChannel.id)}
-                className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
+                className="text-[11.5px] text-ink-faint hover:text-danger transition"
               >
                 Unfollow
               </button>
@@ -1878,10 +1878,10 @@ function App() {
                   {pending.map((p) => (
                     <div
                       key={p.id}
-                      className="text-[12px] text-[var(--color-ink-dim)] px-3 py-2 rounded-md bg-[var(--color-surface)] border border-[var(--color-line)] flex items-center gap-2"
+                      className="text-[12px] text-ink-dim px-3 py-2 rounded-md bg-surface border border-line flex items-center gap-2"
                     >
-                      <span className="inline-block w-3 h-3 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin shrink-0" />
-                      <span className="shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-accent)]/85">
+                      <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin shrink-0" />
+                      <span className="shrink-0 text-[10px] uppercase tracking-wider text-accent/85">
                         {p.kind === "channel" ? "Following" : "Adding"}
                       </span>
                       <span className="truncate">{p.url}</span>
@@ -1916,16 +1916,16 @@ function App() {
                 <div>
                   {channelInboxGrouped.map(({ bucket, items }) => (
                     <section key={"inbox-" + bucket} className="mb-4">
-                      <div className="sticky top-0 z-[5] bg-[var(--color-canvas)]/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-[var(--color-line)]/60">
+                      <div className="sticky top-0 z-[5] bg-canvas/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-line/60">
                         <div className="flex items-baseline gap-3">
                           <h3 className="text-[13px] font-semibold tracking-tight">
                             {RECENCY_LABELS[bucket]}
                           </h3>
-                          <span className="text-[11px] text-[var(--color-ink-faint)] tabular-nums">
+                          <span className="text-[11px] text-ink-faint tabular-nums">
                             {items.length}
                           </span>
                         </div>
-                        <span className="text-[11px] text-[var(--color-ink-faint)] hidden sm:block">
+                        <span className="text-[11px] text-ink-faint hidden sm:block">
                           New from this channel
                         </span>
                       </div>
@@ -1950,12 +1950,12 @@ function App() {
                   ))}
                   {filtered.length > 0 && (
                     <section className="mb-4">
-                      <div className="sticky top-0 z-[5] bg-[var(--color-canvas)]/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-[var(--color-line)]/60">
+                      <div className="sticky top-0 z-[5] bg-canvas/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-line/60">
                         <div className="flex items-baseline gap-3">
                           <h3 className="text-[13px] font-semibold tracking-tight">
                             In your list
                           </h3>
-                          <span className="text-[11px] text-[var(--color-ink-faint)] tabular-nums">
+                          <span className="text-[11px] text-ink-faint tabular-nums">
                             {filtered.length}
                           </span>
                         </div>
@@ -2055,7 +2055,7 @@ function App() {
                     />
                   </div>
                 ) : (
-                  <div className="w-full h-full border-l border-[var(--color-line)] bg-[var(--color-surface)] flex items-center justify-center text-[12.5px] text-[var(--color-ink-faint)] px-6 text-center">
+                  <div className="w-full h-full border-l border-line bg-surface flex items-center justify-center text-[12.5px] text-ink-faint px-6 text-center">
                     Click a video to edit it. {shiftClick} to select a range, {kbdClick()} to toggle individual videos. {kbd("Z")} undoes any change · Delete removes the selection.
                   </div>
                 )}
@@ -2066,10 +2066,10 @@ function App() {
       </div>
 
       {dragHover && (
-        <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-[var(--color-canvas)]/85 backdrop-blur-sm">
-          <div className="px-10 py-8 rounded-2xl border-2 border-dashed border-[var(--color-accent)] text-center">
+        <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-canvas/85 backdrop-blur-sm">
+          <div className="px-10 py-8 rounded-2xl border-2 border-dashed border-accent text-center">
             <div className="text-[20px] font-semibold mb-1">Drop URL to add</div>
-            <div className="text-[13px] text-[var(--color-ink-dim)]">
+            <div className="text-[13px] text-ink-dim">
               Video URLs go to your list · channel URLs start following
             </div>
           </div>
@@ -2123,8 +2123,8 @@ function App() {
             className={
               "text-[12.5px] px-3 py-2 rounded-md shadow-lg border pointer-events-auto flex items-center gap-3 " +
               (t.kind === "err"
-                ? "bg-[var(--color-surface-2)] border-[var(--color-danger)]/40 text-[var(--color-ink)]"
-                : "bg-[var(--color-surface-2)] border-[var(--color-accent-dim)] text-[var(--color-ink)]")
+                ? "bg-surface-2 border-danger/40 text-ink"
+                : "bg-surface-2 border-accent-dim text-ink")
             }
           >
             <span className="flex-1">{t.text}</span>
@@ -2133,7 +2133,7 @@ function App() {
                 onClick={() => {
                   t.action!.onClick();
                 }}
-                className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-accent)] hover:brightness-125"
+                className="text-[12px] font-semibold uppercase tracking-wider text-accent hover:brightness-125"
               >
                 {t.action.label}
               </button>
@@ -2167,10 +2167,10 @@ function EmptyState({
       <div className="h-full flex items-center justify-center text-center px-6">
         <div>
           <div className="text-[18px] font-semibold mb-2">Your library is empty</div>
-          <div className="text-[13px] text-[var(--color-ink-dim)] max-w-md leading-relaxed">
+          <div className="text-[13px] text-ink-dim max-w-md leading-relaxed">
             Drag a video URL from your browser's address bar onto this window, paste one with {kbd("V")}, or click{" "}
-            <span className="text-[var(--color-accent)]">+ Add URL</span>. Channel URLs (e.g.{" "}
-            <code className="text-[var(--color-ink)]">youtube.com/@SomeChannel</code>) start following the channel instead.
+            <span className="text-accent">+ Add URL</span>. Channel URLs (e.g.{" "}
+            <code className="text-ink">youtube.com/@SomeChannel</code>) start following the channel instead.
           </div>
         </div>
       </div>
@@ -2312,14 +2312,14 @@ function CenteredEmpty({
       <div className="max-w-md">
         <div className="text-[15px] font-semibold mb-1.5">{title}</div>
         {body && (
-          <div className="text-[12.5px] text-[var(--color-ink-dim)] leading-relaxed">
+          <div className="text-[12.5px] text-ink-dim leading-relaxed">
             {body}
           </div>
         )}
         {action && (
           <button
             onClick={action.onClick}
-            className="mt-4 text-[12.5px] px-3 py-1.5 rounded-md bg-[var(--color-accent)] text-black hover:brightness-110 transition"
+            className="mt-4 text-[12.5px] px-3 py-1.5 rounded-md bg-accent text-black hover:brightness-110 transition"
           >
             {action.label}
           </button>

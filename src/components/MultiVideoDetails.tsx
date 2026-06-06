@@ -148,20 +148,20 @@ export function MultiVideoDetails({
   const onClickFavorite = () => onSetFavorite(videos, !favoritedAll);
 
   return (
-    <div className="h-full overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-surface)] flex flex-col">
-      <div className="px-5 pt-5 pb-3 border-b border-[var(--color-line)]">
+    <div className="h-full overflow-y-auto border-l border-line bg-surface flex flex-col">
+      <div className="px-5 pt-5 pb-3 border-b border-line">
         <div className="flex items-baseline justify-between">
           <div>
             <h2 className="text-[15px] font-semibold leading-none">
               {n} videos selected
             </h2>
-            <div className="text-[11.5px] text-[var(--color-ink-faint)] mt-1">
+            <div className="text-[11.5px] text-ink-faint mt-1">
               Esc to clear · {kbdClick()} to toggle · {shiftClick} to extend
             </div>
           </div>
           <button
             onClick={onClearSelection}
-            className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] transition"
+            className="text-[11.5px] text-ink-faint hover:text-ink transition"
           >
             Clear
           </button>
@@ -175,8 +175,8 @@ export function MultiVideoDetails({
             className={
               "text-[12.5px] py-2 px-3 rounded-md border transition inline-flex items-center justify-center gap-1.5 " +
               (watchedAll
-                ? "border-[var(--color-line)] bg-[var(--color-surface-2)] text-[var(--color-ink-dim)]"
-                : "border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+                ? "border-line bg-surface-2 text-ink-dim"
+                : "border-line text-ink-dim hover:text-ink hover:bg-surface-2")
             }
             title={
               watchedMixed
@@ -185,7 +185,7 @@ export function MultiVideoDetails({
             }
           >
             {watchedMixed && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]/70" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent/70" />
             )}
             <span>{watchedLabel}</span>
           </button>
@@ -194,8 +194,8 @@ export function MultiVideoDetails({
             className={
               "text-[12.5px] py-2 px-3 rounded-md border transition inline-flex items-center justify-center gap-1.5 " +
               (favoritedAll
-                ? "border-[var(--color-line)] bg-[var(--color-surface-2)] text-[var(--color-ink-dim)]"
-                : "border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)]")
+                ? "border-line bg-surface-2 text-ink-dim"
+                : "border-line text-ink-dim hover:text-ink hover:bg-surface-2")
             }
             title={
               favoritedMixed
@@ -204,17 +204,17 @@ export function MultiVideoDetails({
             }
           >
             {favoritedMixed && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]/70" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent/70" />
             )}
             <span>{favLabel}</span>
           </button>
         </div>
 
         <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
             Folder
             {folderConsensus === "mixed" && (
-              <span className="ml-2 text-[10px] normal-case tracking-normal text-[var(--color-accent)]/85">
+              <span className="ml-2 text-[10px] normal-case tracking-normal text-accent/85">
                 mixed
               </span>
             )}
@@ -236,7 +236,7 @@ export function MultiVideoDetails({
                     ? "Type to set all selected to one folder"
                     : "Folder name (blank to clear)"
                 }
-                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
               />
               <datalist id="folders-list">
                 {knownFolders.map((f) => (
@@ -245,7 +245,7 @@ export function MultiVideoDetails({
               </datalist>
               <button
                 onClick={saveFolder}
-                className="text-[12px] px-2.5 rounded-md bg-[var(--color-surface-2)] hover:bg-[var(--color-line)]"
+                className="text-[12px] px-2.5 rounded-md bg-surface-2 hover:bg-line"
               >
                 Apply
               </button>
@@ -253,16 +253,16 @@ export function MultiVideoDetails({
           ) : (
             <button
               onClick={() => setEditingFolder(true)}
-              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] hover:border-[var(--color-line-soft)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
+              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line hover:border-line-soft text-ink-dim hover:text-ink"
             >
               {folderConsensus === "mixed" ? (
-                <span className="text-[var(--color-ink-faint)]">
+                <span className="text-ink-faint">
                   Mixed — click to set all
                 </span>
               ) : folderConsensus ? (
                 folderConsensus
               ) : (
-                <span className="text-[var(--color-ink-faint)]">
+                <span className="text-ink-faint">
                   No folder — click to set
                 </span>
               )}
@@ -271,14 +271,14 @@ export function MultiVideoDetails({
         </div>
 
         <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
             Tags
-            <span className="ml-2 text-[10px] normal-case tracking-normal text-[var(--color-ink-faint)]">
+            <span className="ml-2 text-[10px] normal-case tracking-normal text-ink-faint">
               shared · partial
             </span>
           </label>
           {sharedTags.length === 0 && partialTags.length === 0 && (
-            <div className="text-[12px] text-[var(--color-ink-faint)] mb-2">
+            <div className="text-[12px] text-ink-faint mb-2">
               None of the selected videos are tagged.
             </div>
           )}
@@ -287,13 +287,13 @@ export function MultiVideoDetails({
               {sharedTags.map((t) => (
                 <span
                   key={"s-" + t}
-                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-accent-dim)]/40 text-[var(--color-accent)]"
+                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-accent-dim/40 text-accent"
                   title="Present on all selected videos"
                 >
                   #{t}
                   <button
                     onClick={() => onRemoveTag(videos, t)}
-                    className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
                     title={`Remove #${t} from all`}
                   >
                     ×
@@ -307,23 +307,23 @@ export function MultiVideoDetails({
               {partialTags.map(({ tag, count }) => (
                 <span
                   key={"p-" + tag}
-                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-dashed border-[var(--color-line)]"
+                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-surface-2 text-ink-dim border border-dashed border-line"
                   title={`Present on ${count} of ${n} — click + to add to remaining, × to remove from those that have it`}
                 >
                   #{tag}
-                  <span className="text-[10px] text-[var(--color-ink-faint)] tabular-nums">
+                  <span className="text-[10px] text-ink-faint tabular-nums">
                     {count}/{n}
                   </span>
                   <button
                     onClick={() => onAddTag(videos, tag)}
-                    className="text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-accent opacity-0 group-hover:opacity-100 transition"
                     title={`Add #${tag} to remaining ${n - count}`}
                   >
                     +
                   </button>
                   <button
                     onClick={() => onRemoveTag(videos, tag)}
-                    className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
                     title={`Remove #${tag} from ${count} that have it`}
                   >
                     ×
@@ -363,10 +363,10 @@ export function MultiVideoDetails({
                 }
               }}
               placeholder={`Add a tag to all ${n} — “a.b” for nesting`}
-              className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+              className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
             />
             {suggestions.length > 0 && (
-              <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
+              <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-line bg-surface shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
                 {suggestions.map((s, i) => (
                   <li
                     key={s}
@@ -380,8 +380,8 @@ export function MultiVideoDetails({
                     className={
                       "px-2.5 py-1 cursor-pointer " +
                       (i === hi
-                        ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
-                        : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)]")
+                        ? "bg-accent-dim text-ink"
+                        : "text-ink-dim hover:bg-surface-2")
                     }
                   >
                     {s}
@@ -392,7 +392,7 @@ export function MultiVideoDetails({
           </div>
         </div>
 
-        <div className="pt-2 border-t border-[var(--color-line)]">
+        <div className="pt-2 border-t border-line">
           <button
             onClick={() => {
               if (
@@ -403,7 +403,7 @@ export function MultiVideoDetails({
                 return;
               onDeleteAll(videos);
             }}
-            className="text-[12px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
+            className="text-[12px] text-ink-faint hover:text-danger transition"
           >
             Remove {n} from library
           </button>
