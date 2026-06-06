@@ -13,19 +13,11 @@ export type Video = {
   raw_tags: string[];
   folder: string | null;
   user_tags: string[];
-  playlist_ids: number[];
   watched: boolean;
   favorite: boolean;
   added_at: number;
   channel_url: string | null;
   channel_id: string | null;
-};
-
-export type Playlist = {
-  id: number;
-  name: string;
-  created_at: number;
-  video_count: number;
 };
 
 export type Channel = {
@@ -73,6 +65,15 @@ export type RefreshSummary = {
   errors: string[];
 };
 
+/** A distinct full dotted tag ("science.biology") with its exact video count.
+ *  The sidebar builds the dotted tree + inclusive parent counts from these. */
+export type TagCount = {
+  tag: string;
+  count: number;
+};
+
+/** Active sidebar filter. `tag` is INCLUSIVE — `tag:"science"` matches videos
+ *  carrying "science" or any descendant ("science.biology", ...). */
 export type Filter =
   | { kind: "all" }
   | { kind: "inbox" }
@@ -82,6 +83,4 @@ export type Filter =
   | { kind: "tag"; name: string }
   | { kind: "folder"; name: string }
   | { kind: "category"; name: string }
-  | { kind: "source"; name: string }
-  | { kind: "channel"; channelId: number }
-  | { kind: "playlist"; playlistId: number };
+  | { kind: "channel"; channelId: number };

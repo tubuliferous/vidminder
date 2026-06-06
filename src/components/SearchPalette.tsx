@@ -1,23 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Video } from "../types";
+import type { ChannelVideo, Video } from "../types";
 import { formatDuration, formatUploadDate } from "../utils";
+
+/** Discriminated pick result: lets App route the user to the right view. */
+export type PalettePick =
+  | { kind: "library"; video: Video }
+  | { kind: "channel"; cv: ChannelVideo };
 
 type Props = {
   open: boolean;
   videos: Video[];
+  /** Raw channel inbox items. Videos already in the library
+   *  (`in_library === true`) are filtered out so library hits win the dedup. */
+  channelVideos: ChannelVideo[];
   onClose: () => void;
-  onPick: (video: Video) => void;
+  onPick: (pick: PalettePick) => void;
 };
 
-type Result = {
-  video: Video;
-  score: number;
-  kind: "title" | "description" | "tag" | "uploader";
-};
+type MatchKind = "title" | "description" | "tag" | "uploader";
+
+type Hit =
+  | { kind: "library"; video: Video; score: number; match: MatchKind }
+  | { kind: "channel"; cv: ChannelVideo; score: number; match: MatchKind };
 
 const MAX_RESULTS = 30;
 
-export function SearchPalette({ open, videos, onClose, onPick }: Props) {
+export function SearchPalette({
+  open,
+  videos,
+  channelVideos,
+  onClose,
+  onPick,
+}: Props) {
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -27,57 +41,94 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
     if (open) {
       setQuery("");
       setActiveIdx(0);
-      // Defer focus until the input mounts.
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
+  // URLs already in the library — used to suppress duplicate hits from the
+  // channel-inbox source (the same video can show in both during ingest).
+  // Library hits always win.
+  const libraryUrls = useMemo(
+    () => new Set(videos.map((v) => v.url)),
+    [videos]
+  );
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    const out: Result[] = [];
+    const words = q.split(/\s+/).filter(Boolean);
+    const out: Hit[] = [];
+
+    // --- Library source -------------------------------------------------
     for (const v of videos) {
       const title = v.title.toLowerCase();
       const description = (v.description ?? "").toLowerCase();
       const uploader = (v.uploader ?? "").toLowerCase();
       const tags = v.user_tags.concat(v.raw_tags).join(" ").toLowerCase();
 
-      // Score: title hits dominate, then uploader, then tags, then description.
-      // Multi-word query: AND of all words (every word must match somewhere).
-      const words = q.split(/\s+/).filter(Boolean);
       const allInTitle = words.every((w) => title.includes(w));
       const allInUploader = words.every((w) => uploader.includes(w));
       const allInTags = words.every((w) => tags.includes(w));
       const allInDesc = words.every((w) => description.includes(w));
 
       if (allInTitle) {
-        // Earlier substring match scores higher; full-phrase match scores higher
-        // than scattered word matches.
         const phraseIdx = title.indexOf(q);
         const score =
-          1000 - (phraseIdx >= 0 ? Math.min(phraseIdx, 200) : 200) -
+          1000 -
+          (phraseIdx >= 0 ? Math.min(phraseIdx, 200) : 200) -
           (title.length - q.length) * 0.01;
-        out.push({ video: v, score, kind: "title" });
+        out.push({ kind: "library", video: v, score, match: "title" });
         continue;
       }
       if (allInUploader) {
-        out.push({ video: v, score: 700, kind: "uploader" });
+        out.push({ kind: "library", video: v, score: 700, match: "uploader" });
         continue;
       }
       if (allInTags) {
-        out.push({ video: v, score: 500, kind: "tag" });
+        out.push({ kind: "library", video: v, score: 500, match: "tag" });
         continue;
       }
       if (allInDesc) {
         const phraseIdx = description.indexOf(q);
         const score =
           300 - (phraseIdx >= 0 ? Math.min(phraseIdx, 200) : 200) * 0.5;
-        out.push({ video: v, score, kind: "description" });
+        out.push({ kind: "library", video: v, score, match: "description" });
       }
     }
+
+    // --- Channel inbox source -------------------------------------------
+    // Anything `in_library === true` is already represented by the library
+    // pass above, so skip. URL dedup is the belt; in_library is the suspenders
+    // — the backend sets in_library, but there's a brief window during ingest
+    // when the library row exists before the channel_video row is updated.
+    for (const cv of channelVideos) {
+      if (cv.in_library) continue;
+      if (libraryUrls.has(cv.url)) continue;
+      const title = cv.title.toLowerCase();
+      const uploader = cv.channel_name.toLowerCase();
+      const allInTitle = words.every((w) => title.includes(w));
+      const allInUploader = words.every((w) => uploader.includes(w));
+
+      if (allInTitle) {
+        const phraseIdx = title.indexOf(q);
+        // Slight penalty (-25) vs library so any tie goes to library, but the
+        // ordering between channel results stays intact.
+        const score =
+          1000 -
+          (phraseIdx >= 0 ? Math.min(phraseIdx, 200) : 200) -
+          (title.length - q.length) * 0.01 -
+          25;
+        out.push({ kind: "channel", cv, score, match: "title" });
+        continue;
+      }
+      if (allInUploader) {
+        out.push({ kind: "channel", cv, score: 675, match: "uploader" });
+      }
+    }
+
     out.sort((a, b) => b.score - a.score);
     return out.slice(0, MAX_RESULTS);
-  }, [query, videos]);
+  }, [query, videos, channelVideos, libraryUrls]);
 
   useEffect(() => {
     setActiveIdx(0);
@@ -102,7 +153,7 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
         e.preventDefault();
         const hit = results[activeIdx];
         if (hit) {
-          onPick(hit.video);
+          onPick(hitToPick(hit));
           onClose();
         }
       }
@@ -111,7 +162,6 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, results, activeIdx, onClose, onPick]);
 
-  // Keep the active row in view as the user arrow-keys through results.
   useEffect(() => {
     if (!listRef.current) return;
     const el = listRef.current.querySelector<HTMLElement>(
@@ -137,7 +187,7 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search your library by title, uploader, tag, or description…"
+            placeholder="Search library + channel inbox by title, uploader, tag…"
             className="flex-1 text-[14px] bg-transparent outline-none placeholder:text-[var(--color-ink-faint)]"
           />
           <span className="text-[11px] text-[var(--color-ink-faint)] hidden md:inline">
@@ -147,7 +197,7 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
 
         <div ref={listRef} className="max-h-[60vh] overflow-y-auto">
           {query.trim() === "" ? (
-            <EmptyHint videos={videos} />
+            <EmptyHint videos={videos} inboxCount={channelVideos.length} />
           ) : results.length === 0 ? (
             <div className="px-5 py-8 text-center text-[12.5px] text-[var(--color-ink-dim)]">
               Nothing matches “{query.trim()}”
@@ -155,14 +205,14 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
           ) : (
             results.map((r, i) => (
               <ResultRow
-                key={r.video.id}
-                result={r}
+                key={hitKey(r)}
+                hit={r}
                 idx={i}
                 query={query.trim()}
                 active={i === activeIdx}
                 onHover={() => setActiveIdx(i)}
                 onPick={() => {
-                  onPick(r.video);
+                  onPick(hitToPick(r));
                   onClose();
                 }}
               />
@@ -174,34 +224,66 @@ export function SearchPalette({ open, videos, onClose, onPick }: Props) {
   );
 }
 
-function EmptyHint({ videos }: { videos: Video[] }) {
+function hitToPick(h: Hit): PalettePick {
+  return h.kind === "library"
+    ? { kind: "library", video: h.video }
+    : { kind: "channel", cv: h.cv };
+}
+
+function hitKey(h: Hit): string {
+  return h.kind === "library" ? `lib:${h.video.id}` : `inbox:${h.cv.id}`;
+}
+
+function EmptyHint({
+  videos,
+  inboxCount,
+}: {
+  videos: Video[];
+  inboxCount: number;
+}) {
   return (
     <div className="px-5 py-8 text-center text-[12.5px] text-[var(--color-ink-dim)]">
-      {videos.length === 0
+      {videos.length === 0 && inboxCount === 0
         ? "Your library is empty"
-        : `Type to search across ${videos.length} ${videos.length === 1 ? "video" : "videos"} — titles ranked first, descriptions next.`}
+        : `Search ${videos.length} library ${
+            videos.length === 1 ? "video" : "videos"
+          } + ${inboxCount} inbox ${
+            inboxCount === 1 ? "item" : "items"
+          } by title, uploader, tag, or description.`}
     </div>
   );
 }
 
 function ResultRow({
-  result,
+  hit,
   idx,
   query,
   active,
   onHover,
   onPick,
 }: {
-  result: Result;
+  hit: Hit;
   idx: number;
   query: string;
   active: boolean;
   onHover: () => void;
   onPick: () => void;
 }) {
-  const v = result.video;
-  const dur = formatDuration(v.duration);
-  const sourceLabel: Record<Result["kind"], string> = {
+  const isInbox = hit.kind === "channel";
+  const title = hit.kind === "library" ? hit.video.title : hit.cv.title;
+  const thumb =
+    hit.kind === "library" ? hit.video.thumbnail_url : hit.cv.thumbnail_url;
+  const duration =
+    hit.kind === "library" ? hit.video.duration : hit.cv.duration;
+  const uploader =
+    hit.kind === "library"
+      ? hit.video.uploader ?? null
+      : hit.cv.channel_name;
+  const uploadDate =
+    hit.kind === "library" ? hit.video.upload_date : hit.cv.upload_date;
+  const watched = hit.kind === "library" ? hit.video.watched : false;
+  const dur = formatDuration(duration);
+  const sourceLabel: Record<MatchKind, string> = {
     title: "Title",
     uploader: "Uploader",
     tag: "Tag",
@@ -220,13 +302,13 @@ function ResultRow({
       }
     >
       <div className="relative shrink-0 w-[88px] h-[50px] rounded overflow-hidden bg-[var(--color-canvas)]">
-        {v.thumbnail_url ? (
+        {thumb ? (
           <img
-            src={v.thumbnail_url}
+            src={thumb}
             alt=""
             referrerPolicy="no-referrer"
             loading="lazy"
-            className={"w-full h-full object-cover " + (v.watched ? "opacity-50" : "")}
+            className={"w-full h-full object-cover " + (watched ? "opacity-50" : "")}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-[var(--color-ink-faint)] text-[10px]">
@@ -241,32 +323,45 @@ function ResultRow({
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-[13px] leading-snug line-clamp-2">
-          <Highlight text={v.title} query={query} />
+          <Highlight text={title} query={query} />
         </div>
         <div className="mt-0.5 text-[11.5px] text-[var(--color-ink-dim)] truncate flex items-center gap-1.5">
-          {v.uploader && (
+          {uploader && (
             <>
-              <span>{v.uploader}</span>
+              <span>{uploader}</span>
               <span className="text-[var(--color-ink-faint)]">·</span>
             </>
           )}
-          {v.upload_date && (
+          {uploadDate && (
             <>
               <span className="text-[var(--color-ink-faint)]">
-                {formatUploadDate(v.upload_date, "short")}
+                {formatUploadDate(uploadDate, "short")}
               </span>
               <span className="text-[var(--color-ink-faint)]">·</span>
             </>
           )}
           <span className="text-[10.5px] uppercase tracking-wider text-[var(--color-accent)]/85">
-            {sourceLabel[result.kind]}
+            {sourceLabel[hit.match]}
           </span>
+          {isInbox && (
+            <span
+              className="text-[9.5px] uppercase tracking-wider px-1.5 py-[1px] rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+              title="From a followed channel's inbox — not yet in your library"
+            >
+              Inbox
+            </span>
+          )}
         </div>
-        {result.kind === "description" && v.description && (
-          <div className="mt-1 text-[11.5px] text-[var(--color-ink-faint)] line-clamp-1">
-            <Highlight text={excerptAround(v.description, query)} query={query} />
-          </div>
-        )}
+        {hit.kind === "library" &&
+          hit.match === "description" &&
+          hit.video.description && (
+            <div className="mt-1 text-[11.5px] text-[var(--color-ink-faint)] line-clamp-1">
+              <Highlight
+                text={excerptAround(hit.video.description, query)}
+                query={query}
+              />
+            </div>
+          )}
       </div>
     </div>
   );

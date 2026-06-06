@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Playlist, Video } from "../types";
+import type { Video } from "../types";
 import { kbdClick, shiftClick } from "../platform";
 
 type Props = {
   videos: Video[];
   knownFolders: string[];
-  playlists: Playlist[];
+  /** Every distinct full dotted tag in use library-wide — fuels the
+   *  nesting-aware autocomplete on the bulk-add input. */
+  allTags: string[];
   onSetWatched: (videos: Video[], watched: boolean) => void;
   onSetFavorite: (videos: Video[], favorite: boolean) => void;
   onSetFolder: (videos: Video[], folder: string | null) => void;
   onAddTag: (videos: Video[], tag: string) => void;
   onRemoveTag: (videos: Video[], tag: string) => void;
-  onAddToPlaylist: (videos: Video[], playlistId: number) => void;
-  onRemoveFromPlaylist: (videos: Video[], playlistId: number) => void;
-  onCreatePlaylist: (name: string) => Promise<Playlist | null>;
   onDeleteAll: (videos: Video[]) => void;
   onClearSelection: () => void;
 };
@@ -21,22 +20,18 @@ type Props = {
 export function MultiVideoDetails({
   videos,
   knownFolders,
-  playlists,
+  allTags,
   onSetWatched,
   onSetFavorite,
   onSetFolder,
   onAddTag,
   onRemoveTag,
-  onAddToPlaylist,
-  onRemoveFromPlaylist,
-  onCreatePlaylist,
   onDeleteAll,
   onClearSelection,
 }: Props) {
-  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
-  const [playlistFilter, setPlaylistFilter] = useState("");
   const n = videos.length;
   const [tagInput, setTagInput] = useState("");
+  const [hi, setHi] = useState(0);
   const [folderInput, setFolderInput] = useState("");
   const [editingFolder, setEditingFolder] = useState(false);
 
@@ -94,17 +89,50 @@ export function MultiVideoDetails({
 
   useEffect(() => {
     setTagInput("");
+    setHi(0);
     setEditingFolder(false);
     setFolderInput(
       folderConsensus && folderConsensus !== "mixed" ? folderConsensus : ""
     );
   }, [videos.map((v) => v.id).join(","), folderConsensus]);
 
+  // Nesting-aware autocomplete. Same logic as the single-video editor's
+  // TagEditor — anchored to the dotted parent the user has typed.
+  const suggestions = useMemo(() => {
+    const q = tagInput.trim().toLowerCase();
+    if (!q) return [];
+    const lastDot = q.lastIndexOf(".");
+    const parent = lastDot >= 0 ? q.slice(0, lastDot) : "";
+    const frag = lastDot >= 0 ? q.slice(lastDot + 1) : q;
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const full of allTags) {
+      const fl = full.toLowerCase();
+      const segs = fl.split(".");
+      const depth = parent ? parent.split(".").length : 0;
+      if (parent && segs.slice(0, depth).join(".") !== parent) continue;
+      if (segs.length <= depth) continue;
+      if (!segs[depth].startsWith(frag)) continue;
+      const cand = segs.slice(0, depth + 1).join(".");
+      const candOrig = full.split(".").slice(0, depth + 1).join(".");
+      if (seen.has(cand) || cand === q) continue;
+      seen.add(cand);
+      out.push(candOrig);
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, [tagInput, allTags]);
+
   const submitTag = () => {
-    const t = tagInput.trim();
+    const t = tagInput
+      .split(".")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(".");
     if (!t) return;
     onAddTag(videos, t);
     setTagInput("");
+    setHi(0);
   };
 
   const saveFolder = () => {
@@ -113,33 +141,9 @@ export function MultiVideoDetails({
     setEditingFolder(false);
   };
 
-  // Playlists present on ALL selected (shared) vs SOME (partial).
-  const { sharedPlaylists, partialPlaylists } = useMemo(() => {
-    const counts = new Map<number, number>();
-    for (const v of videos) {
-      for (const pid of v.playlist_ids) {
-        counts.set(pid, (counts.get(pid) ?? 0) + 1);
-      }
-    }
-    const shared: Playlist[] = [];
-    const partial: { pl: Playlist; count: number }[] = [];
-    for (const [pid, count] of counts) {
-      const pl = playlists.find((p) => p.id === pid);
-      if (!pl) continue;
-      if (count === n) shared.push(pl);
-      else partial.push({ pl, count });
-    }
-    shared.sort((a, b) => a.name.localeCompare(b.name));
-    partial.sort((a, b) => b.count - a.count || a.pl.name.localeCompare(b.pl.name));
-    return { sharedPlaylists: shared, partialPlaylists: partial };
-  }, [videos, playlists, n]);
-
   // Watched / favorite labels & next states
-  const watchedLabel = watchedAll
-    ? "Unmark all watched"
-    : "Mark all watched"; // mixed → mark all watched as default
+  const watchedLabel = watchedAll ? "Unmark all watched" : "Mark all watched";
   const onClickWatched = () => onSetWatched(videos, !watchedAll);
-
   const favLabel = favoritedAll ? "Unstar all" : "Star all";
   const onClickFavorite = () => onSetFavorite(videos, !favoritedAll);
 
@@ -328,144 +332,62 @@ export function MultiVideoDetails({
               ))}
             </div>
           )}
-          <input
-            id="vidminder-tag-input"
-            type="text"
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitTag();
-              if (e.key === "Escape") (e.target as HTMLInputElement).blur();
-            }}
-            placeholder={`Add a tag to all ${n} (Enter to apply)`}
-            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
-            Playlists
-            <span className="ml-2 text-[10px] normal-case tracking-normal text-[var(--color-ink-faint)]">
-              shared · partial
-            </span>
-          </label>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {sharedPlaylists.length === 0 && partialPlaylists.length === 0 && (
-              <span className="text-[12px] text-[var(--color-ink-faint)]">
-                None of the selected are in a playlist.
-              </span>
-            )}
-            {sharedPlaylists.map((pl) => (
-              <span
-                key={"s" + pl.id}
-                className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-[var(--color-line)]"
-                title="In all selected"
-              >
-                {pl.name}
-                <button
-                  onClick={() => onRemoveFromPlaylist(videos, pl.id)}
-                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
-                  title={`Remove all from ${pl.name}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            {partialPlaylists.map(({ pl, count }) => (
-              <span
-                key={"p" + pl.id}
-                className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-dashed border-[var(--color-line)]"
-                title={`In ${count} of ${n}`}
-              >
-                {pl.name}
-                <span className="text-[10px] text-[var(--color-ink-faint)] tabular-nums">
-                  {count}/{n}
-                </span>
-                <button
-                  onClick={() => onAddToPlaylist(videos, pl.id)}
-                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] opacity-0 group-hover:opacity-100 transition"
-                  title={`Add remaining ${n - count} to ${pl.name}`}
-                >
-                  +
-                </button>
-                <button
-                  onClick={() => onRemoveFromPlaylist(videos, pl.id)}
-                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
-                  title={`Remove from the ${count} that have it`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
           <div className="relative">
-            <button
-              onClick={() => {
-                setPlaylistMenuOpen((x) => !x);
-                setPlaylistFilter("");
+            <input
+              id="vidminder-tag-input"
+              type="text"
+              value={tagInput}
+              onChange={(e) => {
+                setTagInput(e.target.value);
+                setHi(0);
               }}
-              className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
-            >
-              + Add all to playlist
-            </button>
-            {playlistMenuOpen && (
-              <div className="absolute z-20 mt-1 w-full max-w-[260px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl p-1.5">
-                <input
-                  autoFocus
-                  value={playlistFilter}
-                  onChange={(e) => setPlaylistFilter(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Escape") setPlaylistMenuOpen(false);
-                    if (e.key === "Enter") {
-                      const name = playlistFilter.trim();
-                      const existing = playlists.find(
-                        (p) => p.name.toLowerCase() === name.toLowerCase()
-                      );
-                      if (existing) onAddToPlaylist(videos, existing.id);
-                      else if (name) {
-                        const pl = await onCreatePlaylist(name);
-                        if (pl) onAddToPlaylist(videos, pl.id);
-                      }
-                      setPlaylistMenuOpen(false);
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" && suggestions.length) {
+                  e.preventDefault();
+                  setHi((i) => (i + 1) % suggestions.length);
+                } else if (e.key === "ArrowUp" && suggestions.length) {
+                  e.preventDefault();
+                  setHi((i) => (i - 1 + suggestions.length) % suggestions.length);
+                } else if (e.key === "Tab" && suggestions[hi]) {
+                  e.preventDefault();
+                  const s = suggestions[hi];
+                  setTagInput(
+                    tagInput.trim().toLowerCase() === s.toLowerCase() ? s + "." : s
+                  );
+                  setHi(0);
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitTag();
+                } else if (e.key === "Escape") {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder={`Add a tag to all ${n} — “a.b” for nesting`}
+              className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+            />
+            {suggestions.length > 0 && (
+              <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
+                {suggestions.map((s, i) => (
+                  <li
+                    key={s}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      onAddTag(videos, s);
+                      setTagInput("");
+                      setHi(0);
+                    }}
+                    onMouseEnter={() => setHi(i)}
+                    className={
+                      "px-2.5 py-1 cursor-pointer " +
+                      (i === hi
+                        ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
+                        : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)]")
                     }
-                  }}
-                  placeholder="Filter or type a new name…"
-                  className="w-full text-[12.5px] px-2 py-1 rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)] mb-1"
-                />
-                <div className="max-h-40 overflow-y-auto">
-                  {playlists
-                    .filter((p) =>
-                      p.name.toLowerCase().includes(playlistFilter.trim().toLowerCase())
-                    )
-                    .map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => {
-                          onAddToPlaylist(videos, p.id);
-                          setPlaylistMenuOpen(false);
-                        }}
-                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  {playlistFilter.trim() &&
-                    !playlists.some(
-                      (p) => p.name.toLowerCase() === playlistFilter.trim().toLowerCase()
-                    ) && (
-                      <button
-                        onClick={async () => {
-                          const pl = await onCreatePlaylist(playlistFilter.trim());
-                          if (pl) onAddToPlaylist(videos, pl.id);
-                          setPlaylistMenuOpen(false);
-                        }}
-                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-accent)]"
-                      >
-                        + Create “{playlistFilter.trim()}”
-                      </button>
-                    )}
-                </div>
-              </div>
+                  >
+                    {s}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </div>

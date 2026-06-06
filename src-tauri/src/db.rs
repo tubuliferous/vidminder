@@ -22,20 +22,11 @@ pub struct Video {
     pub raw_tags: Vec<String>,
     pub folder: Option<String>,
     pub user_tags: Vec<String>,
-    pub playlist_ids: Vec<i64>,
     pub watched: bool,
     pub favorite: bool,
     pub added_at: i64,
     pub channel_url: Option<String>,
     pub channel_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Playlist {
-    pub id: i64,
-    pub name: String,
-    pub created_at: i64,
-    pub video_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -138,24 +129,6 @@ pub fn open_db() -> Result<Db> {
             FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS playlists (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            created_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS playlist_videos (
-            playlist_id INTEGER NOT NULL,
-            video_id INTEGER NOT NULL,
-            added_at INTEGER NOT NULL,
-            position INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (playlist_id, video_id),
-            FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-            FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_playlist_videos_pl ON playlist_videos(playlist_id);
-        CREATE INDEX IF NOT EXISTS idx_playlist_videos_vid ON playlist_videos(video_id);
         CREATE INDEX IF NOT EXISTS idx_videos_folder ON videos(folder);
         CREATE INDEX IF NOT EXISTS idx_videos_category ON videos(category);
         CREATE INDEX IF NOT EXISTS idx_videos_added_at ON videos(added_at DESC);
@@ -206,6 +179,15 @@ pub fn open_db() -> Result<Db> {
         "CREATE INDEX IF NOT EXISTS idx_videos_favorite ON videos(favorite) WHERE favorite = 1;",
     )
     .context("favorite index")?;
+
+    // Playlists were superseded by the dotted-tag tree. Drop legacy tables on
+    // first run after the upgrade so they stop appearing in introspection;
+    // existing playlist memberships are not migrated (per project decision).
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS playlist_videos;\n\
+         DROP TABLE IF EXISTS playlists;",
+    )
+    .context("dropping legacy playlist tables")?;
     Ok(Db(Mutex::new(conn)))
 }
 
@@ -337,7 +319,6 @@ pub fn get_video(conn: &Connection, id: i64) -> Result<Option<Video>> {
     match row {
         Some(Ok(mut v)) => {
             v.user_tags = list_tags_for_video(conn, v.id)?;
-            v.playlist_ids = list_playlists_for_video(conn, v.id)?;
             Ok(Some(v))
         }
         Some(Err(e)) => Err(e.into()),
@@ -358,7 +339,6 @@ pub fn list_videos(conn: &Connection) -> Result<Vec<Video>> {
     for row in rows {
         let mut v = row??;
         v.user_tags = list_tags_for_video(conn, v.id)?;
-        v.playlist_ids = list_playlists_for_video(conn, v.id)?;
         out.push(v);
     }
     Ok(out)
@@ -384,108 +364,12 @@ fn row_to_video(r: &rusqlite::Row<'_>) -> rusqlite::Result<Video> {
         raw_tags,
         folder: r.get("folder")?,
         user_tags: Vec::new(),
-        playlist_ids: Vec::new(),
         watched: watched_int != 0,
         favorite: favorite_int != 0,
         added_at: r.get("added_at")?,
         channel_url: r.get("channel_url").ok(),
         channel_id: r.get("channel_id").ok(),
     })
-}
-
-// --- Playlists ----------------------------------------------------------------
-
-pub fn list_playlists_for_video(conn: &Connection, video_id: i64) -> Result<Vec<i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT playlist_id FROM playlist_videos WHERE video_id = ?1",
-    )?;
-    let rows = stmt.query_map(params![video_id], |r| r.get::<_, i64>(0))?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>> {
-    let mut stmt = conn.prepare(
-        r#"SELECT p.id, p.name, p.created_at,
-                  (SELECT COUNT(*) FROM playlist_videos pv WHERE pv.playlist_id = p.id) AS video_count
-           FROM playlists p
-           ORDER BY p.name COLLATE NOCASE"#,
-    )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(Playlist {
-            id: r.get("id")?,
-            name: r.get("name")?,
-            created_at: r.get("created_at")?,
-            video_count: r.get("video_count")?,
-        })
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
-pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64> {
-    let name = name.trim();
-    if name.is_empty() {
-        anyhow::bail!("playlist name is empty");
-    }
-    conn.execute(
-        "INSERT OR IGNORE INTO playlists (name, created_at) VALUES (?1, ?2)",
-        params![name, unix_now()],
-    )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM playlists WHERE name = ?1 COLLATE NOCASE",
-        params![name],
-        |r| r.get(0),
-    )?;
-    Ok(id)
-}
-
-pub fn delete_playlist(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
-    Ok(())
-}
-
-pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> Result<()> {
-    let name = name.trim();
-    if name.is_empty() {
-        anyhow::bail!("playlist name is empty");
-    }
-    conn.execute(
-        "UPDATE playlists SET name = ?1 WHERE id = ?2",
-        params![name, id],
-    )?;
-    Ok(())
-}
-
-pub fn add_video_to_playlist(conn: &Connection, playlist_id: i64, video_id: i64) -> Result<()> {
-    // position = current max + 1 so playlists keep insertion order.
-    let next_pos: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_videos WHERE playlist_id = ?1",
-            params![playlist_id],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    conn.execute(
-        "INSERT OR IGNORE INTO playlist_videos (playlist_id, video_id, added_at, position)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![playlist_id, video_id, unix_now(), next_pos],
-    )?;
-    Ok(())
-}
-
-pub fn remove_video_from_playlist(
-    conn: &Connection,
-    playlist_id: i64,
-    video_id: i64,
-) -> Result<()> {
-    conn.execute(
-        "DELETE FROM playlist_videos WHERE playlist_id = ?1 AND video_id = ?2",
-        params![playlist_id, video_id],
-    )?;
-    Ok(())
 }
 
 pub fn delete_video(conn: &Connection, id: i64) -> Result<()> {
@@ -517,20 +401,133 @@ pub fn set_favorite(conn: &Connection, id: i64, favorite: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn add_tag(conn: &Connection, video_id: i64, name: &str) -> Result<()> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Ok(());
+// === Tags: dotted-namespace, Calibre-style ===============================
+//
+// Tags are stored as flat dotted strings in `tags.name`. The hierarchy is
+// derived at render time on the frontend from the dotted string itself
+// ("science.biology" is a child of "science"). Operations that touch a tag
+// also touch its descendants — `delete_tag("science")` removes "science",
+// "science.biology", "science.biology.computational", etc., and renaming
+// re-paths the whole subtree.
+//
+// Casing: the table's `UNIQUE COLLATE NOCASE` constraint enforces case-
+// insensitive identity, but display casing is preserved as first-written.
+// When a tag is created we canonicalize each dotted segment against the
+// earliest-created casing already in use for that segment-path — so typing
+// "science.biology" attaches as "Science.Biology" if those casings won
+// earlier. Renaming a tag is the way to change canonical casing everywhere.
+
+/// Normalize: trim each dotted segment, drop empties, rejoin with '.'.
+/// "science . biology .. " -> "science.biology". Case preserved.
+pub fn normalize_tag(t: &str) -> String {
+    t.split('.')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Build lowercased-segment-path -> canonical (display-cased) path from all
+/// existing tags. Earliest tag.id wins per path.
+fn tag_canon_map(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT name FROM tags ORDER BY id ASC")?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut canon = std::collections::HashMap::new();
+    for t in &existing {
+        let (mut acc, mut lacc) = (String::new(), String::new());
+        for seg in t.split('.') {
+            if acc.is_empty() {
+                acc.push_str(seg);
+                lacc.push_str(&seg.to_lowercase());
+            } else {
+                acc.push('.');
+                acc.push_str(seg);
+                lacc.push('.');
+                lacc.push_str(&seg.to_lowercase());
+            }
+            canon.entry(lacc.clone()).or_insert_with(|| acc.clone());
+        }
     }
+    Ok(canon)
+}
+
+/// Canonicalize one (already-normalized) dotted tag against `canon`, registering
+/// any new segment-paths so a multi-segment new tag stays self-consistent.
+fn canon_apply(canon: &mut std::collections::HashMap<String, String>, tag: &str) -> String {
+    let (mut out, mut lacc) = (String::new(), String::new());
+    for seg in tag.split('.') {
+        if lacc.is_empty() {
+            lacc = seg.to_lowercase();
+        } else {
+            lacc.push('.');
+            lacc.push_str(&seg.to_lowercase());
+        }
+        if let Some(c) = canon.get(&lacc) {
+            out = c.clone();
+        } else {
+            if out.is_empty() {
+                out = seg.to_string();
+            } else {
+                out.push('.');
+                out.push_str(seg);
+            }
+            canon.insert(lacc.clone(), out.clone());
+        }
+    }
+    out
+}
+
+/// Get-or-create a tag row for the given (already-canonical) name.
+fn get_or_create_tag(conn: &Connection, name: &str) -> Result<i64> {
     conn.execute(
         "INSERT OR IGNORE INTO tags(name) VALUES (?1)",
         params![name],
     )?;
-    let tag_id: i64 = conn.query_row(
+    let id: i64 = conn.query_row(
         "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE",
         params![name],
         |r| r.get(0),
     )?;
+    Ok(id)
+}
+
+/// A distinct full tag and the number of videos carrying it exactly. The
+/// frontend builds the dotted tree + inclusive parent counts from this.
+#[derive(Debug, Serialize, Clone)]
+pub struct TagCount {
+    pub tag: String,
+    pub count: i64,
+}
+
+pub fn list_tag_counts(conn: &Connection) -> Result<Vec<TagCount>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.name, COUNT(DISTINCT vt.video_id)
+         FROM tags t
+         JOIN video_tags vt ON vt.tag_id = t.id
+         GROUP BY t.id
+         ORDER BY t.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(TagCount {
+            tag: r.get(0)?,
+            count: r.get(1)?,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Add one tag to one video. Normalizes + canonicalizes against existing tags.
+pub fn add_tag(conn: &Connection, video_id: i64, name: &str) -> Result<()> {
+    let t = normalize_tag(name);
+    if t.is_empty() {
+        return Ok(());
+    }
+    let mut canon = tag_canon_map(conn)?;
+    let t = canon_apply(&mut canon, &t);
+    let tag_id = get_or_create_tag(conn, &t)?;
     conn.execute(
         "INSERT OR IGNORE INTO video_tags(video_id, tag_id) VALUES (?1, ?2)",
         params![video_id, tag_id],
@@ -538,12 +535,151 @@ pub fn add_tag(conn: &Connection, video_id: i64, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove one exact tag from one video (does NOT touch descendants — that's
+/// `delete_tag`'s job, which acts library-wide).
 pub fn remove_tag(conn: &Connection, video_id: i64, name: &str) -> Result<()> {
+    let t = normalize_tag(name);
+    if t.is_empty() {
+        return Ok(());
+    }
     conn.execute(
         r#"DELETE FROM video_tags
            WHERE video_id = ?1
              AND tag_id = (SELECT id FROM tags WHERE name = ?2 COLLATE NOCASE)"#,
-        params![video_id, name],
+        params![video_id, t],
+    )?;
+    Ok(())
+}
+
+/// Replace all of a video's tags with `tags` (normalized + canonicalized).
+pub fn set_video_tags(conn: &Connection, video_id: i64, tags: &[String]) -> Result<()> {
+    let mut canon = tag_canon_map(conn)?;
+    conn.execute(
+        "DELETE FROM video_tags WHERE video_id = ?1",
+        params![video_id],
+    )?;
+    for t in tags {
+        let t = normalize_tag(t);
+        if t.is_empty() {
+            continue;
+        }
+        let t = canon_apply(&mut canon, &t);
+        let tag_id = get_or_create_tag(conn, &t)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO video_tags(video_id, tag_id) VALUES (?1, ?2)",
+            params![video_id, tag_id],
+        )?;
+    }
+    Ok(())
+}
+
+/// Add one tag to many videos (bulk drag-to-tag from the sidebar).
+pub fn add_tag_to_videos(conn: &Connection, video_ids: &[i64], tag: &str) -> Result<()> {
+    let t = normalize_tag(tag);
+    if t.is_empty() {
+        return Ok(());
+    }
+    let mut canon = tag_canon_map(conn)?;
+    let t = canon_apply(&mut canon, &t);
+    let tag_id = get_or_create_tag(conn, &t)?;
+    for &vid in video_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO video_tags(video_id, tag_id) VALUES (?1, ?2)",
+            params![vid, tag_id],
+        )?;
+    }
+    Ok(())
+}
+
+/// Rename `old` and every descendant tag (`old.…`) to sit under `new`.
+/// Example: rename "science.bio" -> "science.biology" also rewrites
+/// "science.bio.x" to "science.biology.x".
+pub fn rename_tag_in_db(conn: &Connection, old: &str, new: &str) -> Result<()> {
+    let old = normalize_tag(old);
+    let new = normalize_tag(new);
+    if old.is_empty() || new.is_empty() || old.eq_ignore_ascii_case(&new) {
+        return Ok(());
+    }
+    let pattern = format!("{}.", old);
+    let mut stmt = conn.prepare(
+        "SELECT id, name FROM tags
+         WHERE name = ?1 COLLATE NOCASE
+            OR substr(name, 1, ?2) = ?3 COLLATE NOCASE",
+    )?;
+    let affected: Vec<(i64, String)> = stmt
+        .query_map(params![&old, pattern.len() as i64, &pattern], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut canon = tag_canon_map(conn)?;
+    for (old_id, old_name) in affected {
+        // Sliced at the matched-prefix length (case-insensitive match — so we
+        // use old_name's own prefix length, which equals old.len()).
+        let suffix = if old_name.len() >= old.len() {
+            &old_name[old.len()..]
+        } else {
+            ""
+        };
+        let new_name = normalize_tag(&format!("{}{}", new, suffix));
+        let new_canon = canon_apply(&mut canon, &new_name);
+        let new_id = get_or_create_tag(conn, &new_canon)?;
+        if new_id == old_id {
+            continue;
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO video_tags(video_id, tag_id)
+             SELECT video_id, ?1 FROM video_tags WHERE tag_id = ?2",
+            params![new_id, old_id],
+        )?;
+        conn.execute(
+            "DELETE FROM video_tags WHERE tag_id = ?1",
+            params![old_id],
+        )?;
+        conn.execute("DELETE FROM tags WHERE id = ?1", params![old_id])?;
+    }
+    Ok(())
+}
+
+/// Remove `tag` from every video.
+///
+/// For a SUB-TAG ("science.biology"): collapse the leaf segment instead of
+/// hard-deleting — every affected path is rewritten with the deleted segment
+/// stripped, so the parent ancestry survives:
+///   "science.biology"               → "science"
+///   "science.biology.computational" → "science.computational"
+/// This is the Calibre intuition: removing a leaf folder should leave its
+/// parent folder intact for items that lived there.
+///
+/// For a TOP-LEVEL tag ("science"): there's no parent to fall back to, so we
+/// remove the tag and every descendant outright from every video.
+pub fn delete_tag_in_db(conn: &Connection, tag: &str) -> Result<()> {
+    let tag = normalize_tag(tag);
+    if tag.is_empty() {
+        return Ok(());
+    }
+    // Sub-tag: collapse to parent. Rename does the prefix rewrite for us —
+    // exact-match rows become the parent, descendants get the deleted segment
+    // spliced out (because rename rewrites `old.…` → `new.…`).
+    if let Some(dot_idx) = tag.rfind('.') {
+        let parent = tag[..dot_idx].to_string();
+        return rename_tag_in_db(conn, &tag, &parent);
+    }
+    // Top-level: nuke the tag and its whole subtree from every video.
+    let pattern = format!("{}.", tag);
+    conn.execute(
+        "DELETE FROM video_tags WHERE tag_id IN (
+            SELECT id FROM tags
+            WHERE name = ?1 COLLATE NOCASE
+               OR substr(name, 1, ?2) = ?3 COLLATE NOCASE
+         )",
+        params![&tag, pattern.len() as i64, &pattern],
+    )?;
+    conn.execute(
+        "DELETE FROM tags
+         WHERE name = ?1 COLLATE NOCASE
+            OR substr(name, 1, ?2) = ?3 COLLATE NOCASE",
+        params![&tag, pattern.len() as i64, &pattern],
     )?;
     Ok(())
 }

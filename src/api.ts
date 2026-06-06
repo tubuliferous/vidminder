@@ -5,8 +5,8 @@ import type {
   Channel,
   ChannelVideo,
   IngestResult,
-  Playlist,
   RefreshSummary,
+  TagCount,
   Video,
 } from "./types";
 import { withAutoplay } from "./utils";
@@ -113,31 +113,24 @@ export async function removeTag(id: number, tag: string): Promise<string[]> {
   return await invoke<string[]>("remove_tag", { id, tag });
 }
 
-export async function listPlaylists(): Promise<Playlist[]> {
-  return await invoke<Playlist[]>("list_playlists");
+export async function listTagCounts(): Promise<TagCount[]> {
+  return await invoke<TagCount[]>("list_tag_counts");
 }
 
-export async function createPlaylist(name: string): Promise<Playlist> {
-  return await invoke<Playlist>("create_playlist", { name });
+export async function setVideoTags(id: number, tags: string[]): Promise<string[]> {
+  return await invoke<string[]>("set_video_tags", { id, tags });
 }
 
-export async function deletePlaylist(id: number): Promise<void> {
-  await invoke("delete_playlist", { id });
+export async function addTagToVideos(videoIds: number[], tag: string): Promise<void> {
+  await invoke("add_tag_to_videos", { videoIds, tag });
 }
 
-export async function renamePlaylist(id: number, name: string): Promise<void> {
-  await invoke("rename_playlist", { id, name });
+export async function renameTag(oldTag: string, newTag: string): Promise<void> {
+  await invoke("rename_tag", { old: oldTag, new: newTag });
 }
 
-export async function addToPlaylist(playlistId: number, videoId: number): Promise<void> {
-  await invoke("add_to_playlist", { playlistId, videoId });
-}
-
-export async function removeFromPlaylist(
-  playlistId: number,
-  videoId: number
-): Promise<void> {
-  await invoke("remove_from_playlist", { playlistId, videoId });
+export async function deleteTag(tag: string): Promise<void> {
+  await invoke("delete_tag", { tag });
 }
 
 export async function openInBrowser(url: string): Promise<void> {

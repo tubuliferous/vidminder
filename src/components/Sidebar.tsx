@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import type { Channel, Filter, Playlist, Video } from "../types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Channel, Filter, TagCount, Video } from "../types";
 import { DRAG_MIME, extractUrlFromDrop } from "../utils";
 import { kbd } from "../platform";
 import * as api from "../api";
@@ -7,7 +7,6 @@ import * as api from "../api";
 type Props = {
   videos: Video[];
   channels: Channel[];
-  playlists: Playlist[];
   inboxCount: number;
   filter: Filter;
   onFilter: (f: Filter) => void;
@@ -17,34 +16,33 @@ type Props = {
   draggingVideo: boolean;
   onDropToFolder: (videoId: number, folder: string) => void;
   onDropToTag: (videoId: number, tag: string) => void;
+  onDropUrlToTag: (url: string, tag: string) => void;
+  onRenameTag: (oldTag: string, newTag: string) => void;
+  onDeleteTag: (tag: string) => void;
   onDropToFavorites: (videoId: number) => void;
   onDropToWatched: (videoId: number) => void;
   onDropToUnwatched: (videoId: number) => void;
   onChannelCategoryChange: (channelId: number, category: string | null) => void;
-  onCreatePlaylist: (name: string) => void;
-  onRenamePlaylist: (id: number, name: string) => void;
-  onDeletePlaylist: (id: number) => void;
-  onDropVideoToPlaylist: (videoId: number, playlistId: number) => void;
-  onDropUrlToPlaylist: (url: string, playlistId: number) => void;
   onOpenSettings: () => void;
 };
 
 function counts(videos: Video[]) {
-  const tags = new Map<string, number>();
+  const tagCounts = new Map<string, number>();
   const folders = new Map<string, number>();
   const categories = new Map<string, number>();
-  const sources = new Map<string, number>();
   let watched = 0;
   let favorites = 0;
   for (const v of videos) {
     if (v.watched) watched += 1;
     if (v.favorite) favorites += 1;
-    for (const t of v.user_tags) tags.set(t, (tags.get(t) ?? 0) + 1);
+    for (const t of v.user_tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
     if (v.folder) folders.set(v.folder, (folders.get(v.folder) ?? 0) + 1);
     if (v.category) categories.set(v.category, (categories.get(v.category) ?? 0) + 1);
-    if (v.source) sources.set(v.source, (sources.get(v.source) ?? 0) + 1);
   }
-  return { tags, folders, categories, sources, watched, favorites };
+  const tags: TagCount[] = [...tagCounts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+  return { tags, folders, categories, watched, favorites };
 }
 
 function sortByCount(m: Map<string, number>) {
@@ -265,7 +263,6 @@ function Row({
 export function Sidebar({
   videos,
   channels,
-  playlists,
   inboxCount,
   filter,
   onFilter,
@@ -275,19 +272,15 @@ export function Sidebar({
   draggingVideo,
   onDropToFolder,
   onDropToTag,
+  onDropUrlToTag,
+  onRenameTag,
+  onDeleteTag,
   onDropToFavorites,
   onDropToWatched,
   onDropToUnwatched,
   onChannelCategoryChange,
-  onCreatePlaylist,
-  onRenamePlaylist,
-  onDeletePlaylist,
-  onDropVideoToPlaylist,
-  onDropUrlToPlaylist,
   onOpenSettings,
 }: Props) {
-  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
-  const [newPlaylistName, setNewPlaylistName] = useState("");
   const c = counts(videos);
   const total = videos.length;
   const unwatched = total - c.watched;
@@ -392,72 +385,6 @@ export function Sidebar({
           )}
         </Section>
 
-        <Section
-          title="Playlists"
-          storageKey="playlists"
-          trailing={
-            <button
-              onClick={() => {
-                setCreatingPlaylist((x) => !x);
-                setNewPlaylistName("");
-              }}
-              className="w-[14px] h-[14px] p-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:bg-[var(--color-accent)] hover:text-black transition inline-flex items-center justify-center shrink-0"
-              title="New playlist"
-            >
-              <PlusIcon />
-            </button>
-          }
-        >
-          {creatingPlaylist && (
-            <div className="px-1.5 mb-1">
-              <input
-                autoFocus
-                value={newPlaylistName}
-                onChange={(e) => setNewPlaylistName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const name = newPlaylistName.trim();
-                    if (name) onCreatePlaylist(name);
-                    setNewPlaylistName("");
-                    setCreatingPlaylist(false);
-                  }
-                  if (e.key === "Escape") {
-                    setNewPlaylistName("");
-                    setCreatingPlaylist(false);
-                  }
-                }}
-                onBlur={() => {
-                  const name = newPlaylistName.trim();
-                  if (name) onCreatePlaylist(name);
-                  setNewPlaylistName("");
-                  setCreatingPlaylist(false);
-                }}
-                placeholder="Playlist name, Enter to create"
-                className="w-full text-[12.5px] px-2 py-[3px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
-              />
-            </div>
-          )}
-          {playlists.length === 0 && !creatingPlaylist ? (
-            <div className="px-3 text-[11.5px] text-[var(--color-ink-faint)] leading-snug">
-              Click <span className="text-[var(--color-ink-dim)]">+</span> to make a playlist, then drag videos (or drop a URL) onto it.
-            </div>
-          ) : (
-            playlists.map((pl) => (
-              <PlaylistRow
-                key={pl.id}
-                playlist={pl}
-                active={isActive({ kind: "playlist", playlistId: pl.id })}
-                draggingVideo={draggingVideo}
-                onSelect={() => onFilter({ kind: "playlist", playlistId: pl.id })}
-                onRename={(name) => onRenamePlaylist(pl.id, name)}
-                onDelete={() => onDeletePlaylist(pl.id)}
-                onDropVideo={(vid) => onDropVideoToPlaylist(vid, pl.id)}
-                onDropUrl={(url) => onDropUrlToPlaylist(url, pl.id)}
-              />
-            ))
-          )}
-        </Section>
-
         {c.folders.size > 0 && (
           <Section title="Folders" storageKey="folders">
             {sortByCount(c.folders).map(([name, n]) => (
@@ -475,20 +402,18 @@ export function Sidebar({
           </Section>
         )}
 
-        {c.tags.size > 0 && (
+        {c.tags.length > 0 && (
           <Section title="Tags" storageKey="tags">
-            {sortByCount(c.tags).map(([name, n]) => (
-              <Row
-                key={"t:" + name}
-                active={isActive({ kind: "tag", name })}
-                label={name}
-                count={n}
-                onClick={() => onFilter({ kind: "tag", name })}
-                dropTarget
-                draggingVideo={draggingVideo}
-                onDropVideo={(id) => onDropToTag(id, name)}
-              />
-            ))}
+            <TagTree
+              tags={c.tags}
+              filter={filter}
+              onFilter={onFilter}
+              draggingVideo={draggingVideo}
+              onDropToTag={onDropToTag}
+              onDropUrlToTag={onDropUrlToTag}
+              onRenameTag={onRenameTag}
+              onDeleteTag={onDeleteTag}
+            />
           </Section>
         )}
 
@@ -501,20 +426,6 @@ export function Sidebar({
                 label={name}
                 count={n}
                 onClick={() => onFilter({ kind: "category", name })}
-              />
-            ))}
-          </Section>
-        )}
-
-        {c.sources.size > 1 && (
-          <Section title="Sources" storageKey="sources">
-            {sortByCount(c.sources).map(([name, n]) => (
-              <Row
-                key={"s:" + name}
-                active={isActive({ kind: "source", name })}
-                label={name}
-                count={n}
-                onClick={() => onFilter({ kind: "source", name })}
               />
             ))}
           </Section>
@@ -730,57 +641,315 @@ function ChannelRow({
   );
 }
 
-function PlaylistRow({
-  playlist,
-  active,
+// ---------------------------------------------------------------------------
+// Dotted-tag tree (Calibre-style). Tags are stored flat as dotted strings on
+// the backend; the tree is derived here at render time. Selecting a node
+// filters inclusively — clicking "science" lists videos tagged "science",
+// "science.biology", "science.biology.computational", etc. (the App.tsx tag
+// filter implements the same prefix rule).
+// ---------------------------------------------------------------------------
+
+type TagNode = {
+  name: string; // last dotted segment, what the row renders
+  path: string; // full dotted path
+  children: TagNode[];
+  exact: number; // videos tagged exactly this path
+  total: number; // inclusive: exact + sum of descendants' exact
+};
+
+function buildTagTree(tags: TagCount[]): TagNode[] {
+  const root: TagNode = { name: "", path: "", children: [], exact: 0, total: 0 };
+  const find = (parent: TagNode, name: string, path: string): TagNode => {
+    let child = parent.children.find((c) => c.name === name);
+    if (!child) {
+      child = { name, path, children: [], exact: 0, total: 0 };
+      parent.children.push(child);
+    }
+    return child;
+  };
+  for (const { tag, count } of tags) {
+    const segs = tag.split(".").filter(Boolean);
+    if (!segs.length) continue;
+    let node = root;
+    let acc = "";
+    for (const seg of segs) {
+      acc = acc ? `${acc}.${seg}` : seg;
+      node = find(node, seg, acc);
+    }
+    node.exact += count;
+  }
+  const fill = (n: TagNode): number => {
+    n.total = n.exact + n.children.reduce((s, c) => s + fill(c), 0);
+    n.children.sort((a, b) => a.name.localeCompare(b.name));
+    return n.total;
+  };
+  root.children.forEach(fill);
+  root.children.sort((a, b) => a.name.localeCompare(b.name));
+  return root.children;
+}
+
+const TAG_COLLAPSED_KEY = "vidminder.sidebar.tag-collapsed.v1";
+
+function loadTagCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(TAG_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveTagCollapsed(set: Set<string>) {
+  try {
+    localStorage.setItem(TAG_COLLAPSED_KEY, JSON.stringify([...set]));
+  } catch {
+    /* private browsing — ignore */
+  }
+}
+
+function TagTree({
+  tags,
+  filter,
+  onFilter,
   draggingVideo,
-  onSelect,
+  onDropToTag,
+  onDropUrlToTag,
+  onRenameTag,
+  onDeleteTag,
+}: {
+  tags: TagCount[];
+  filter: Filter;
+  onFilter: (f: Filter) => void;
+  draggingVideo: boolean;
+  onDropToTag: (videoId: number, tag: string) => void;
+  onDropUrlToTag: (url: string, tag: string) => void;
+  onRenameTag: (oldTag: string, newTag: string) => void;
+  onDeleteTag: (tag: string) => void;
+}) {
+  const tree = useMemo(() => buildTagTree(tags), [tags]);
+  // Default expanded; track only the paths the user has explicitly collapsed.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadTagCollapsed());
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+
+  const toggle = (path: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      saveTagCollapsed(next);
+      return next;
+    });
+  };
+
+  // ⌥-click: collapse or expand a node AND all its descendants in one shot.
+  const toggleSubtree = (node: TagNode, open: boolean) => {
+    const paths: string[] = [];
+    const walk = (n: TagNode) => {
+      paths.push(n.path);
+      n.children.forEach(walk);
+    };
+    walk(node);
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      for (const p of paths) {
+        if (open) next.delete(p);
+        else next.add(p);
+      }
+      saveTagCollapsed(next);
+      return next;
+    });
+  };
+
+  const renderNode = (n: TagNode, depth: number): React.ReactNode => {
+    const isOpen = !collapsed.has(n.path);
+    const isActiveNode =
+      filter.kind === "tag" && (filter as { name: string }).name === n.path;
+    const hasKids = n.children.length > 0;
+    return (
+      <div key={n.path}>
+        <TagNodeRow
+          node={n}
+          depth={depth}
+          isOpen={isOpen}
+          isActive={isActiveNode}
+          isRenaming={renaming === n.path}
+          draggingVideo={draggingVideo}
+          onClick={(e) => {
+            // ⌥-click anywhere on a tag row expands/collapses its whole subtree.
+            if (e.altKey && hasKids) toggleSubtree(n, collapsed.has(n.path));
+            else onFilter({ kind: "tag", name: n.path });
+          }}
+          onToggle={(e) => {
+            if (e.altKey && hasKids) toggleSubtree(n, collapsed.has(n.path));
+            else toggle(n.path);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMenu({ x: e.clientX, y: e.clientY, path: n.path });
+          }}
+          onBeginRename={() => setRenaming(n.path)}
+          onCommitRename={(seg) => {
+            setRenaming(null);
+            const clean = seg.trim().replace(/\./g, " ").trim();
+            if (!clean || clean === n.name) return;
+            const parent = n.path.includes(".")
+              ? n.path.slice(0, n.path.lastIndexOf("."))
+              : "";
+            onRenameTag(n.path, parent ? `${parent}.${clean}` : clean);
+          }}
+          onCancelRename={() => setRenaming(null)}
+          onDropVideo={(vid) => onDropToTag(vid, n.path)}
+          onDropUrl={(url) => onDropUrlToTag(url, n.path)}
+        />
+        {isOpen && hasKids && n.children.map((c) => renderNode(c, depth + 1))}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      {tree.map((n) => renderNode(n, 0))}
+      {menu && (
+        <TagContextMenu
+          x={menu.x}
+          y={menu.y}
+          path={menu.path}
+          onRename={(path) => {
+            setMenu(null);
+            setRenaming(path);
+          }}
+          onDelete={(path) => {
+            setMenu(null);
+            if (confirm(`Delete tag "${path}" and all its sub-tags from every video?`)) {
+              onDeleteTag(path);
+            }
+          }}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function TagContextMenu({
+  x,
+  y,
+  path,
   onRename,
   onDelete,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  path: string;
+  onRename: (path: string) => void;
+  onDelete: (path: string) => void;
+  onClose: () => void;
+}) {
+  // Dismiss on any outside click, right-click, or Escape. Binding through
+  // useEffect ensures we always tear down on unmount — earlier "addEventListener
+  // with { once: true }" was lossy because three listeners could leak past the
+  // single click that closed the menu.
+  useEffect(() => {
+    const close = () => onClose();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      style={{ position: "fixed", left: x, top: y, zIndex: 1000 }}
+      className="min-w-[160px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px]"
+    >
+      <button
+        onClick={() => onRename(path)}
+        className="block w-full text-left px-3 py-1.5 text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+      >
+        Rename…
+      </button>
+      <button
+        onClick={() => onDelete(path)}
+        className="block w-full text-left px-3 py-1.5 text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)]"
+      >
+        Delete tag + sub-tags
+      </button>
+    </div>
+  );
+}
+
+function TagNodeRow({
+  node,
+  depth,
+  isOpen,
+  isActive,
+  isRenaming,
+  draggingVideo,
+  onClick,
+  onToggle,
+  onContextMenu,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
   onDropVideo,
   onDropUrl,
 }: {
-  playlist: Playlist;
-  active: boolean;
+  node: TagNode;
+  depth: number;
+  isOpen: boolean;
+  isActive: boolean;
+  isRenaming: boolean;
   draggingVideo: boolean;
-  onSelect: () => void;
-  onRename: (name: string) => void;
-  onDelete: () => void;
+  onClick: (e: React.MouseEvent) => void;
+  onToggle: (e: React.MouseEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onBeginRename: () => void;
+  onCommitRename: (newName: string) => void;
+  onCancelRename: () => void;
   onDropVideo: (videoId: number) => void;
   onDropUrl: (url: string) => void;
 }) {
   const [hover, setHover] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(playlist.name);
+  const [draft, setDraft] = useState(node.name);
   const dragDepth = useRef(0);
+  const hasKids = node.children.length > 0;
 
-  const dropTypes = (e: React.DragEvent) => Array.from(e.dataTransfer.types || []);
   const carriesDrop = (e: React.DragEvent) => {
-    const t = dropTypes(e);
+    const t = Array.from(e.dataTransfer.types || []);
     return t.includes(DRAG_MIME) || t.includes("text/uri-list") || t.includes("text/plain");
   };
 
-  if (editing) {
+  if (isRenaming) {
     return (
-      <div className="mx-1.5 px-2 py-[5px]">
+      <div
+        className="mx-1.5 px-2 py-[5px]"
+        style={{ paddingLeft: 6 + depth * 12 }}
+      >
         <input
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              if (draft.trim()) onRename(draft.trim());
-              setEditing(false);
-            }
+            if (e.key === "Enter") onCommitRename(draft);
             if (e.key === "Escape") {
-              setDraft(playlist.name);
-              setEditing(false);
+              setDraft(node.name);
+              onCancelRename();
             }
           }}
-          onBlur={() => {
-            if (draft.trim() && draft.trim() !== playlist.name) onRename(draft.trim());
-            setEditing(false);
-          }}
+          onBlur={() => onCommitRename(draft)}
+          onClick={(e) => e.stopPropagation()}
           className="w-full text-[12.5px] px-2 py-[2px] rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </div>
@@ -792,11 +961,12 @@ function PlaylistRow({
       role="button"
       tabIndex={0}
       data-url-drop-target="true"
-      onClick={onSelect}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect();
+          onClick(e as unknown as React.MouseEvent);
         }
       }}
       onDragEnter={(e) => {
@@ -829,68 +999,52 @@ function PlaylistRow({
           onDropUrl(url);
         }
       }}
+      style={{ paddingLeft: 6 + depth * 12 }}
       className={
-        "group flex items-center justify-between text-left text-[13px] rounded-md mx-1.5 px-2 py-[5px] transition-colors cursor-pointer " +
+        "group flex items-center text-left text-[13px] rounded-md mx-1.5 pr-2 py-[5px] gap-1 transition-colors cursor-pointer " +
         (hover
           ? "bg-[var(--color-accent)] text-black ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]"
-          : active
+          : isActive
           ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
           : draggingVideo
           ? "text-[var(--color-ink-dim)] bg-[var(--color-surface-2)]/40 outline-dashed outline-2 outline-[var(--color-accent)]/55 outline-offset-[-3px]"
           : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]")
       }
     >
-      <span className="truncate flex-1">{playlist.name}</span>
-      <span className="flex items-center gap-1.5 shrink-0">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setDraft(playlist.name);
-            setEditing(true);
-          }}
-          title="Rename playlist"
-          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-accent)] transition"
-        >
-          <PencilIcon />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title="Delete playlist"
-          className="opacity-0 group-hover:opacity-100 text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
-        >
-          ×
-        </button>
-        <span
-          className={
-            "text-[11px] tabular-nums " +
-            (hover ? "text-black/70" : "text-[var(--color-ink-faint)]")
-          }
-        >
-          {playlist.video_count}
-        </span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle(e);
+        }}
+        className={
+          "shrink-0 inline-flex items-center justify-center w-3 h-3 " +
+          (hasKids ? "opacity-100" : "opacity-0 pointer-events-none")
+        }
+        title={hasKids ? "Click to expand/collapse · ⌥-click for the whole subtree" : undefined}
+        tabIndex={-1}
+      >
+        <Chevron expanded={isOpen} />
+      </button>
+      <span
+        className="truncate flex-1"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setDraft(node.name);
+          onBeginRename();
+        }}
+        title="Double-click to rename"
+      >
+        {node.name}
+      </span>
+      <span
+        className={
+          "text-[11px] tabular-nums shrink-0 " +
+          (hover ? "text-black/70" : "text-[var(--color-ink-faint)]")
+        }
+      >
+        {node.total}
       </span>
     </div>
-  );
-}
-
-function PencilIcon() {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-    </svg>
   );
 }
 

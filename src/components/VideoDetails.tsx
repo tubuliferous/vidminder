@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { Channel, Playlist, Video } from "../types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Channel, Video } from "../types";
 import { formatAddedAt, formatDuration, formatUploadDate } from "../utils";
 import { kbd } from "../platform";
 import * as api from "../api";
@@ -8,59 +8,45 @@ type Props = {
   video: Video;
   knownFolders: string[];
   followedChannels: Channel[];
-  playlists: Playlist[];
-  onAddTag: (video: Video, tag: string) => void;
-  onRemoveTag: (video: Video, tag: string) => void;
+  /** Every distinct full dotted tag currently in use across the library —
+   *  powers nesting-aware autocomplete in the tag editor. */
+  allTags: string[];
+  /** Replace the full set of tags on this video. The Calibre-style editor
+   *  commits the whole set on each Enter/Backspace edit; the parent
+   *  canonicalizes via the backend. */
+  onSetTags: (video: Video, tags: string[]) => void;
   onSetFolder: (video: Video, folder: string | null) => void;
   onToggleWatched: (video: Video) => void;
   onToggleFavorite: (video: Video) => void;
   onOpen: (video: Video) => void;
   onRequestDelete: () => void;
   onFollowChannel: (video: Video) => void;
-  onAddToPlaylist: (videos: Video[], playlistId: number) => void;
-  onRemoveFromPlaylist: (videos: Video[], playlistId: number) => void;
-  onCreatePlaylist: (name: string) => Promise<Playlist | null>;
 };
 
 export function VideoDetails({
   video,
   knownFolders,
   followedChannels,
-  playlists,
-  onAddTag,
-  onRemoveTag,
+  allTags,
+  onSetTags,
   onSetFolder,
   onToggleWatched,
   onToggleFavorite,
   onOpen,
   onRequestDelete,
   onFollowChannel,
-  onAddToPlaylist,
-  onRemoveFromPlaylist,
-  onCreatePlaylist,
 }: Props) {
-  const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
-  const [playlistFilter, setPlaylistFilter] = useState("");
-  const [tagInput, setTagInput] = useState("");
   const [folderInput, setFolderInput] = useState(video.folder ?? "");
   const [editingFolder, setEditingFolder] = useState(false);
 
   useEffect(() => {
     setFolderInput(video.folder ?? "");
     setEditingFolder(false);
-    setTagInput("");
   }, [video.id]);
 
   const isFollowed =
     !!video.channel_url && followedChannels.some((c) => c.url === video.channel_url);
   const canFollow = !!video.channel_url && !isFollowed;
-
-  const submitTag = () => {
-    const t = tagInput.trim();
-    if (!t) return;
-    onAddTag(video, t);
-    setTagInput("");
-  };
 
   const saveFolder = () => {
     const next = folderInput.trim() || null;
@@ -222,151 +208,7 @@ export function VideoDetails({
           )}
         </div>
 
-        <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
-            Tags
-          </label>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {video.user_tags.length === 0 && (
-              <span className="text-[12px] text-[var(--color-ink-faint)]">No tags yet</span>
-            )}
-            {video.user_tags.map((t) => (
-              <span
-                key={t}
-                className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-accent-dim)]/40 text-[var(--color-accent)]"
-              >
-                #{t}
-                <button
-                  onClick={() => onRemoveTag(video, t)}
-                  className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
-                  title="Remove tag"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-          <input
-            id="vidminder-tag-input"
-            type="text"
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitTag();
-              if (e.key === "Escape") {
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            placeholder={`Add a tag and press Enter (${kbd("T")} to focus)`}
-            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
-          />
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
-            Playlists
-          </label>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {video.playlist_ids.length === 0 && (
-              <span className="text-[12px] text-[var(--color-ink-faint)]">
-                Not in any playlist
-              </span>
-            )}
-            {video.playlist_ids.map((pid) => {
-              const pl = playlists.find((p) => p.id === pid);
-              if (!pl) return null;
-              return (
-                <span
-                  key={pid}
-                  className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border border-[var(--color-line)]"
-                >
-                  {pl.name}
-                  <button
-                    onClick={() => onRemoveFromPlaylist([video], pid)}
-                    className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
-                    title={`Remove from ${pl.name}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              );
-            })}
-          </div>
-          <div className="relative">
-            <button
-              onClick={() => {
-                setPlaylistMenuOpen((x) => !x);
-                setPlaylistFilter("");
-              }}
-              className="text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-line)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] transition"
-            >
-              + Add to playlist
-            </button>
-            {playlistMenuOpen && (
-              <div className="absolute z-20 mt-1 w-full max-w-[260px] rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl p-1.5">
-                <input
-                  autoFocus
-                  value={playlistFilter}
-                  onChange={(e) => setPlaylistFilter(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Escape") setPlaylistMenuOpen(false);
-                    if (e.key === "Enter") {
-                      const name = playlistFilter.trim();
-                      const existing = playlists.find(
-                        (p) => p.name.toLowerCase() === name.toLowerCase()
-                      );
-                      if (existing) {
-                        onAddToPlaylist([video], existing.id);
-                      } else if (name) {
-                        const pl = await onCreatePlaylist(name);
-                        if (pl) onAddToPlaylist([video], pl.id);
-                      }
-                      setPlaylistMenuOpen(false);
-                    }
-                  }}
-                  placeholder="Filter or type a new name…"
-                  className="w-full text-[12.5px] px-2 py-1 rounded bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)] mb-1"
-                />
-                <div className="max-h-40 overflow-y-auto">
-                  {playlists
-                    .filter(
-                      (p) =>
-                        !video.playlist_ids.includes(p.id) &&
-                        p.name.toLowerCase().includes(playlistFilter.trim().toLowerCase())
-                    )
-                    .map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => {
-                          onAddToPlaylist([video], p.id);
-                          setPlaylistMenuOpen(false);
-                        }}
-                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] hover:text-[var(--color-ink)]"
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  {playlistFilter.trim() &&
-                    !playlists.some(
-                      (p) =>
-                        p.name.toLowerCase() === playlistFilter.trim().toLowerCase()
-                    ) && (
-                      <button
-                        onClick={async () => {
-                          const pl = await onCreatePlaylist(playlistFilter.trim());
-                          if (pl) onAddToPlaylist([video], pl.id);
-                          setPlaylistMenuOpen(false);
-                        }}
-                        className="w-full text-left text-[12.5px] px-2 py-1 rounded hover:bg-[var(--color-surface-2)] text-[var(--color-accent)]"
-                      >
-                        + Create “{playlistFilter.trim()}”
-                      </button>
-                    )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <TagEditor video={video} allTags={allTags} onSetTags={onSetTags} />
 
         {video.description && (
           <div>
@@ -412,6 +254,190 @@ export function VideoDetails({
             Remove from library
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tag editor with Calibre-style nesting-aware autocomplete. Tags are dotted
+// (e.g. "science.biology.computational"); typing the parent path then "."
+// drills into its children. Tab completes in place; Enter / comma commits a
+// chip; Backspace at an empty input removes the last chip.
+// ---------------------------------------------------------------------------
+
+function TagEditor({
+  video,
+  allTags,
+  onSetTags,
+}: {
+  video: Video;
+  allTags: string[];
+  onSetTags: (video: Video, tags: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [hi, setHi] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Reset draft when the selected video changes.
+  useEffect(() => {
+    setDraft("");
+    setHi(0);
+  }, [video.id]);
+
+  const normOne = (t: string) =>
+    t.split(".").map((s) => s.trim()).filter(Boolean).join(".");
+
+  const commitTags = (next: string[]) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of next) {
+      const n = normOne(t);
+      if (!n) continue;
+      const k = n.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(n);
+    }
+    onSetTags(video, out);
+  };
+
+  // Suggestions are anchored to the parent path the user has already typed.
+  // "bio" → "biology"; "biology." → "biology.immunology"; "biology.imm" →
+  // "biology.immunology". Exact-match-to-draft is filtered so the live
+  // suggestion list never duplicates what's fully typed.
+  const suggestions = useMemo(() => {
+    const q = draft.trim().toLowerCase();
+    if (!q) return [];
+    const lastDot = q.lastIndexOf(".");
+    const parent = lastDot >= 0 ? q.slice(0, lastDot) : "";
+    const frag = lastDot >= 0 ? q.slice(lastDot + 1) : q;
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const full of allTags) {
+      const fl = full.toLowerCase();
+      const segs = fl.split(".");
+      const depth = parent ? parent.split(".").length : 0;
+      if (parent && segs.slice(0, depth).join(".") !== parent) continue;
+      if (segs.length <= depth) continue;
+      if (!segs[depth].startsWith(frag)) continue;
+      const cand = segs.slice(0, depth + 1).join(".");
+      const candOrig = full.split(".").slice(0, depth + 1).join(".");
+      if (seen.has(cand) || cand === q) continue;
+      seen.add(cand);
+      out.push(candOrig);
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, [draft, allTags]);
+
+  const addFromDraft = () => {
+    // Comma-separated entry adds several at once.
+    const parts = draft
+      .split(/,+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setDraft("");
+    setHi(0);
+    if (parts.length) commitTags([...video.user_tags, ...parts]);
+  };
+
+  const commitSuggestion = (s: string) => {
+    setDraft("");
+    setHi(0);
+    commitTags([...video.user_tags, s]);
+  };
+
+  return (
+    <div>
+      <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">
+        Tags
+      </label>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {video.user_tags.length === 0 && (
+          <span className="text-[12px] text-[var(--color-ink-faint)]">No tags yet</span>
+        )}
+        {video.user_tags.map((t) => (
+          <span
+            key={t}
+            className="group flex items-center gap-1 text-[12px] px-2 py-[2px] rounded bg-[var(--color-accent-dim)]/40 text-[var(--color-accent)]"
+          >
+            #{t}
+            <button
+              onClick={() => commitTags(video.user_tags.filter((x) => x !== t))}
+              className="text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition"
+              title="Remove tag"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="relative">
+        <input
+          ref={inputRef}
+          id="vidminder-tag-input"
+          type="text"
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setHi(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" && suggestions.length) {
+              e.preventDefault();
+              setHi((i) => (i + 1) % suggestions.length);
+            } else if (e.key === "ArrowUp" && suggestions.length) {
+              e.preventDefault();
+              setHi((i) => (i - 1 + suggestions.length) % suggestions.length);
+            } else if (e.key === "Tab" && suggestions[hi]) {
+              // Complete in place (shell-style). Repeated Tab on a fully-
+              // matched suggestion appends "." so the next Tab drills in.
+              e.preventDefault();
+              const s = suggestions[hi];
+              setDraft(
+                draft.trim().toLowerCase() === s.toLowerCase() ? s + "." : s
+              );
+              setHi(0);
+            } else if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              addFromDraft();
+            } else if (e.key === "Escape" && draft) {
+              e.preventDefault();
+              setDraft("");
+            } else if (e.key === "Backspace" && !draft && video.user_tags.length) {
+              commitTags(video.user_tags.slice(0, -1));
+            }
+          }}
+          onBlur={() => {
+            // Delay so a suggestion click registers before we clear.
+            setTimeout(() => draft.trim() && addFromDraft(), 120);
+          }}
+          placeholder={`Add a tag — “a.b” for nesting (${kbd("T")} to focus)`}
+          className="w-full text-[13px] px-2 py-1.5 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-accent)]"
+        />
+        {suggestions.length > 0 && (
+          <ul className="absolute z-20 left-0 right-0 mt-1 rounded-md border border-[var(--color-line)] bg-[var(--color-surface)] shadow-xl py-1 text-[12.5px] max-h-56 overflow-y-auto">
+            {suggestions.map((s, i) => (
+              <li
+                key={s}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  commitSuggestion(s);
+                }}
+                onMouseEnter={() => setHi(i)}
+                className={
+                  "px-2.5 py-1 cursor-pointer " +
+                  (i === hi
+                    ? "bg-[var(--color-accent-dim)] text-[var(--color-ink)]"
+                    : "text-[var(--color-ink-dim)] hover:bg-[var(--color-surface-2)]")
+                }
+              >
+                {s}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

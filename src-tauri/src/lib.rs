@@ -2,7 +2,7 @@ mod db;
 mod youtube_rss;
 mod ytdlp;
 
-use db::{Channel, ChannelVideo, Db, NewChannel, NewChannelVideo, NewVideo, Playlist, Video};
+use db::{Channel, ChannelVideo, Db, NewChannel, NewChannelVideo, NewVideo, TagCount, Video};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -690,10 +690,6 @@ fn restore_video(video: Video, db: State<'_, Db>) -> AppResult<Video> {
         for t in &video.user_tags {
             db::add_tag(conn, id, t)?;
         }
-        // Restore playlist memberships (playlists themselves still exist).
-        for pid in &video.playlist_ids {
-            let _ = db::add_video_to_playlist(conn, *pid, id);
-        }
         db::get_video(conn, id)?
             .ok_or_else(|| anyhow::anyhow!("restored video missing"))
     })
@@ -740,49 +736,59 @@ fn list_folders(db: State<'_, Db>) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
-fn list_playlists(db: State<'_, Db>) -> AppResult<Vec<Playlist>> {
-    with_conn(&db, |conn| db::list_playlists(conn))
-}
-
-#[tauri::command]
-fn create_playlist(name: String, db: State<'_, Db>) -> AppResult<Playlist> {
-    let id = with_conn(&db, |conn| db::create_playlist(conn, &name))?;
-    with_conn(&db, |conn| {
-        db::list_playlists(conn)
-            .map(|ps| ps.into_iter().find(|p| p.id == id))?
-            .ok_or_else(|| anyhow::anyhow!("created playlist missing"))
-    })
-}
-
-#[tauri::command]
-fn delete_playlist(id: i64, db: State<'_, Db>) -> AppResult<()> {
-    with_conn(&db, |conn| db::delete_playlist(conn, id))
-}
-
-#[tauri::command]
-fn rename_playlist(id: i64, name: String, db: State<'_, Db>) -> AppResult<()> {
-    with_conn(&db, |conn| db::rename_playlist(conn, id, &name))
-}
-
-#[tauri::command]
-fn add_to_playlist(playlist_id: i64, video_id: i64, db: State<'_, Db>) -> AppResult<()> {
-    with_conn(&db, |conn| db::add_video_to_playlist(conn, playlist_id, video_id))
-}
-
-#[tauri::command]
-fn remove_from_playlist(
-    playlist_id: i64,
-    video_id: i64,
-    db: State<'_, Db>,
-) -> AppResult<()> {
-    with_conn(&db, |conn| {
-        db::remove_video_from_playlist(conn, playlist_id, video_id)
-    })
-}
-
-#[tauri::command]
 fn list_tags(db: State<'_, Db>) -> AppResult<Vec<String>> {
     with_conn(&db, |conn| db::list_all_tags(conn))
+}
+
+#[tauri::command]
+fn list_tag_counts(db: State<'_, Db>) -> AppResult<Vec<TagCount>> {
+    with_conn(&db, |conn| db::list_tag_counts(conn))
+}
+
+#[tauri::command]
+fn set_video_tags(
+    id: i64,
+    tags: Vec<String>,
+    app: AppHandle,
+    db: State<'_, Db>,
+) -> AppResult<Vec<String>> {
+    let out = with_conn(&db, |conn| {
+        db::set_video_tags(conn, id, &tags)?;
+        db::list_tags_for_video(conn, id)
+    })?;
+    let _ = app.emit("videos-changed", ());
+    Ok(out)
+}
+
+#[tauri::command]
+fn add_tag_to_videos(
+    video_ids: Vec<i64>,
+    tag: String,
+    app: AppHandle,
+    db: State<'_, Db>,
+) -> AppResult<()> {
+    with_conn(&db, |conn| db::add_tag_to_videos(conn, &video_ids, &tag))?;
+    let _ = app.emit("videos-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_tag(
+    old: String,
+    new: String,
+    app: AppHandle,
+    db: State<'_, Db>,
+) -> AppResult<()> {
+    with_conn(&db, |conn| db::rename_tag_in_db(conn, &old, &new))?;
+    let _ = app.emit("videos-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_tag(tag: String, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    with_conn(&db, |conn| db::delete_tag_in_db(conn, &tag))?;
+    let _ = app.emit("videos-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -1011,13 +1017,12 @@ pub fn run() {
             remove_tag,
             list_folders,
             list_tags,
+            list_tag_counts,
+            set_video_tags,
+            add_tag_to_videos,
+            rename_tag,
+            delete_tag,
             list_categories,
-            list_playlists,
-            create_playlist,
-            delete_playlist,
-            rename_playlist,
-            add_to_playlist,
-            remove_from_playlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VidMinder");

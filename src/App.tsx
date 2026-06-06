@@ -7,7 +7,6 @@ import type {
   ChannelVideo,
   Filter,
   IngestResult,
-  Playlist,
   Video,
 } from "./types";
 import { Sidebar } from "./components/Sidebar";
@@ -54,7 +53,6 @@ function App() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [inbox, setInbox] = useState<ChannelVideo[]>([]);
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
   // Multi-select. selectedIds carries the full selection; anchorId is the
   // pivot for shift-click range selects. Treat single selection as a set of
@@ -199,20 +197,11 @@ function App() {
     }
   }, [pushToast]);
 
-  const refreshPlaylists = useCallback(async () => {
-    try {
-      setPlaylists(await api.listPlaylists());
-    } catch (e) {
-      pushToast({ kind: "err", text: `Could not load playlists: ${e}` });
-    }
-  }, [pushToast]);
-
   useEffect(() => {
     refreshVideos();
     refreshChannelsList();
     refreshInbox();
-    refreshPlaylists();
-  }, [refreshVideos, refreshChannelsList, refreshInbox, refreshPlaylists]);
+  }, [refreshVideos, refreshChannelsList, refreshInbox]);
 
   // Periodic channel refresh, frequency controlled by user setting.
   // The Rust side handles the initial startup poll; we own the recurring
@@ -583,176 +572,76 @@ function App() {
   );
 
   // -----------------------------------------------------------------------
-  // Playlists
+  // Tag-tree operations (Calibre-style dotted tags). Sub-tags are part of
+  // their parent's namespace, so `delete_tag("foo")` removes "foo", "foo.bar",
+  // "foo.bar.baz", … in one shot. Rename re-paths the whole subtree.
   // -----------------------------------------------------------------------
 
-  const handleCreatePlaylist = useCallback(
-    async (name: string): Promise<Playlist | null> => {
-      const clean = name.trim();
-      if (!clean) return null;
+  const handleRenameTag = useCallback(
+    async (oldTag: string, newTag: string) => {
+      const a = oldTag.trim();
+      const b = newTag.trim();
+      if (!a || !b || a === b) return;
       try {
-        const pl = await api.createPlaylist(clean);
-        await refreshPlaylists();
-        return pl;
+        await api.renameTag(a, b);
       } catch (e) {
         pushToast({ kind: "err", text: String(e) });
-        return null;
+        return;
       }
+      // Refresh the canonical tag set from the backend — rename rebinds rows
+      // across many videos, and we want the new dotted names everywhere.
+      try {
+        const fresh = await api.listVideos();
+        setVideos(fresh);
+      } catch {
+        /* non-fatal — next event will resync */
+      }
+      // If the active filter was on a node we just renamed (or its descendant),
+      // move it to the new path.
+      if (filter.kind === "tag") {
+        if (filter.name === a) {
+          setFilter({ kind: "tag", name: b });
+        } else if (filter.name.startsWith(`${a}.`)) {
+          setFilter({ kind: "tag", name: b + filter.name.slice(a.length) });
+        }
+      }
+      pushToast({ kind: "ok", text: `Renamed “${a}” → “${b}”` });
     },
-    [pushToast, refreshPlaylists]
+    [filter, pushToast]
   );
 
-  const handleDeletePlaylist = useCallback(
-    async (id: number) => {
-      const pl = playlists.find((p) => p.id === id);
-      if (!pl) return;
-      if (!confirm(`Delete playlist "${pl.name}"? (videos stay in your library)`))
-        return;
+  const handleDeleteTag = useCallback(
+    async (tag: string) => {
       try {
-        await api.deletePlaylist(id);
+        await api.deleteTag(tag);
       } catch (e) {
         pushToast({ kind: "err", text: String(e) });
         return;
       }
-      if (filter.kind === "playlist" && filter.playlistId === id) {
+      try {
+        const fresh = await api.listVideos();
+        setVideos(fresh);
+      } catch {
+        /* non-fatal */
+      }
+      if (
+        filter.kind === "tag" &&
+        (filter.name === tag || filter.name.startsWith(`${tag}.`))
+      ) {
         setFilter({ kind: "all" });
       }
-      // Drop the membership locally so cards update immediately.
-      setVideos((prev) =>
-        prev.map((v) =>
-          v.playlist_ids.includes(id)
-            ? { ...v, playlist_ids: v.playlist_ids.filter((p) => p !== id) }
-            : v
-        )
-      );
-      refreshPlaylists();
-      pushToast({ kind: "ok", text: `Deleted playlist "${pl.name}"` });
+      pushToast({ kind: "ok", text: `Deleted tag “${tag}”` });
     },
-    [filter, playlists, pushToast, refreshPlaylists]
+    [filter, pushToast]
   );
 
-  const handleRenamePlaylist = useCallback(
-    async (id: number, name: string) => {
-      const clean = name.trim();
-      if (!clean) return;
-      try {
-        await api.renamePlaylist(id, clean);
-        refreshPlaylists();
-      } catch (e) {
-        pushToast({ kind: "err", text: String(e) });
-      }
-    },
-    [pushToast, refreshPlaylists]
-  );
-
-  const handleAddVideosToPlaylist = useCallback(
-    async (videosArr: Video[], playlistId: number) => {
-      const pl = playlists.find((p) => p.id === playlistId);
-      const targets = videosArr.filter(
-        (v) => !v.playlist_ids.includes(playlistId)
-      );
-      if (targets.length === 0) return;
-      try {
-        await Promise.all(
-          targets.map((v) => api.addToPlaylist(playlistId, v.id))
-        );
-      } catch (e) {
-        pushToast({ kind: "err", text: String(e) });
-        return;
-      }
-      const ids = new Set(targets.map((v) => v.id));
-      setVideos((prev) =>
-        prev.map((v) =>
-          ids.has(v.id)
-            ? { ...v, playlist_ids: [...v.playlist_ids, playlistId] }
-            : v
-        )
-      );
-      refreshPlaylists();
-      recordUndo(
-        `Added ${targets.length} to "${pl?.name ?? "playlist"}"`,
-        async () => {
-          await Promise.all(
-            targets.map((v) => api.removeFromPlaylist(playlistId, v.id))
-          );
-          setVideos((prev) =>
-            prev.map((v) =>
-              ids.has(v.id)
-                ? {
-                    ...v,
-                    playlist_ids: v.playlist_ids.filter((p) => p !== playlistId),
-                  }
-                : v
-            )
-          );
-          refreshPlaylists();
-        }
-      );
-    },
-    [playlists, pushToast, recordUndo, refreshPlaylists]
-  );
-
-  const handleRemoveVideosFromPlaylist = useCallback(
-    async (videosArr: Video[], playlistId: number) => {
-      const pl = playlists.find((p) => p.id === playlistId);
-      const targets = videosArr.filter((v) => v.playlist_ids.includes(playlistId));
-      if (targets.length === 0) return;
-      try {
-        await Promise.all(
-          targets.map((v) => api.removeFromPlaylist(playlistId, v.id))
-        );
-      } catch (e) {
-        pushToast({ kind: "err", text: String(e) });
-        return;
-      }
-      const ids = new Set(targets.map((v) => v.id));
-      setVideos((prev) =>
-        prev.map((v) =>
-          ids.has(v.id)
-            ? {
-                ...v,
-                playlist_ids: v.playlist_ids.filter((p) => p !== playlistId),
-              }
-            : v
-        )
-      );
-      refreshPlaylists();
-      recordUndo(
-        `Removed ${targets.length} from "${pl?.name ?? "playlist"}"`,
-        async () => {
-          await Promise.all(
-            targets.map((v) => api.addToPlaylist(playlistId, v.id))
-          );
-          setVideos((prev) =>
-            prev.map((v) =>
-              ids.has(v.id)
-                ? { ...v, playlist_ids: [...v.playlist_ids, playlistId] }
-                : v
-            )
-          );
-          refreshPlaylists();
-        }
-      );
-    },
-    [playlists, pushToast, recordUndo, refreshPlaylists]
-  );
-
-  const handleDropVideoToPlaylist = useCallback(
-    (videoId: number, playlistId: number) => {
-      const v = videos.find((x) => x.id === videoId);
-      if (v) handleAddVideosToPlaylist([v], playlistId);
-    },
-    [videos, handleAddVideosToPlaylist]
-  );
-
-  // Dropping a URL onto a playlist: ingest the video into the library, then
-  // add it to the playlist. This is the "adding to a playlist auto-adds to
-  // the library" behavior.
-  const handleDropUrlToPlaylist = useCallback(
-    async (rawUrl: string, playlistId: number) => {
+  // Dropping a URL onto a tag node: ingest the video into the library, then
+  // tag it (auto-adding to the library en route).
+  const handleDropUrlToTag = useCallback(
+    async (rawUrl: string, tag: string) => {
       const url = normalizeYouTubeInput(rawUrl);
       if (!url) {
-        pushToast({ kind: "err", text: "Only YouTube video URLs can go in a playlist" });
+        pushToast({ kind: "err", text: "Only YouTube URLs can be added by drag-drop" });
         return;
       }
       const pendId = crypto.randomUUID();
@@ -762,7 +651,7 @@ function App() {
         if (result.kind !== "video") {
           pushToast({
             kind: "err",
-            text: "That's a channel URL — drop a single video onto a playlist",
+            text: "That's a channel URL — drop a single video onto a tag",
           });
           return;
         }
@@ -775,17 +664,12 @@ function App() {
             /* non-fatal */
           }
         }
-        await api.addToPlaylist(playlistId, v.id);
-        const withPlaylist = {
-          ...v,
-          playlist_ids: [...new Set([...v.playlist_ids, playlistId])],
-        };
-        insertVideoLocally(withPlaylist);
-        refreshPlaylists();
-        const pl = playlists.find((p) => p.id === playlistId);
+        const updatedTags = await api.addTag(v.id, tag);
+        const withTag = { ...v, user_tags: updatedTags };
+        insertVideoLocally(withTag);
         pushToast({
           kind: "ok",
-          text: `Added “${v.title.slice(0, 50)}” to ${pl?.name ?? "playlist"}`,
+          text: `Added “${v.title.slice(0, 50)}” with #${tag}`,
         });
       } catch (e) {
         pushToast({ kind: "err", text: String(e).replace(/^Error: /, "") });
@@ -793,7 +677,7 @@ function App() {
         setPending((p) => p.filter((x) => x.id !== pendId));
       }
     },
-    [insertVideoLocally, playlists, pushToast, refreshPlaylists, settings.autoFavorite]
+    [insertVideoLocally, pushToast, settings.autoFavorite]
   );
 
   const handleDeleteVideos = useCallback(
@@ -975,22 +859,31 @@ function App() {
     [pushToast, recordUndo]
   );
 
-  const handleRemoveTag = useCallback(
-    async (video: Video, tag: string) => {
-      let tags: string[];
+  // Replace the entire user_tags set on one video. Used by the dotted-tag
+  // editor in the details pane — it commits the full intent in one shot so
+  // canonical-casing happens server-side instead of via accreted add/remove.
+  const handleSetTags = useCallback(
+    async (video: Video, nextTags: string[]) => {
+      const before = video.user_tags;
+      let saved: string[];
       try {
-        tags = await api.removeTag(video.id, tag);
+        saved = await api.setVideoTags(video.id, nextTags);
       } catch (e) {
-        pushToast({ kind: "err", text: `Couldn't remove tag: ${e}` });
+        pushToast({ kind: "err", text: String(e) });
         return;
       }
       setVideos((prev) =>
-        prev.map((v) => (v.id === video.id ? { ...v, user_tags: tags } : v))
+        prev.map((v) => (v.id === video.id ? { ...v, user_tags: saved } : v))
       );
-      recordUndo(`Removed tag #${tag}`, async () => {
-        const updated = await api.addTag(video.id, tag);
+      // Only record an undo if something actually changed.
+      const changed =
+        before.length !== saved.length ||
+        before.some((t, i) => t !== saved[i]);
+      if (!changed) return;
+      recordUndo(`Updated tags on “${video.title.slice(0, 40)}”`, async () => {
+        const back = await api.setVideoTags(video.id, before);
         setVideos((prev) =>
-          prev.map((v) => (v.id === video.id ? { ...v, user_tags: updated } : v))
+          prev.map((v) => (v.id === video.id ? { ...v, user_tags: back } : v))
         );
       });
     },
@@ -1186,7 +1079,7 @@ function App() {
         // Let sidebar drop targets handle it (or quietly ignore if dropped elsewhere).
         return;
       }
-      // A playlist row handles its own URL drops (ingest + add to playlist).
+      // A sidebar tag node handles its own URL drops (ingest + auto-tag).
       // The React handler on the row runs before this window handler, so by
       // the time we get here it's already done — just reset overlay state.
       const target = e.target as HTMLElement | null;
@@ -1445,17 +1338,23 @@ function App() {
         case "unwatched":
           if (v.watched) return false;
           break;
-        case "tag":
-          if (!v.user_tags.includes(filter.name)) return false;
+        case "tag": {
+          // Inclusive (Calibre-style): selecting "science" matches videos
+          // tagged "science" or any descendant ("science.biology", etc.).
+          // The backend tag canonicalization preserves case, so plain string
+          // equality / startsWith is correct here.
+          const prefix = `${filter.name}.`;
+          const hit = v.user_tags.some(
+            (t) => t === filter.name || t.startsWith(prefix)
+          );
+          if (!hit) return false;
           break;
+        }
         case "folder":
           if (v.folder !== filter.name) return false;
           break;
         case "category":
           if (v.category !== filter.name) return false;
-          break;
-        case "source":
-          if (v.source !== filter.name) return false;
           break;
         case "channel": {
           const ch = channels.find((c) => c.id === filter.channelId);
@@ -1466,9 +1365,6 @@ function App() {
           if (!sameUrl && !sameId && !sameName) return false;
           break;
         }
-        case "playlist":
-          if (!v.playlist_ids.includes(filter.playlistId)) return false;
-          break;
       }
       if (!q) return true;
       const hay = [
@@ -1503,6 +1399,14 @@ function App() {
   const knownFolders = useMemo(() => {
     const s = new Set<string>();
     for (const v of videos) if (v.folder) s.add(v.folder);
+    return [...s].sort((a, b) => a.localeCompare(b));
+  }, [videos]);
+
+  // Every distinct full dotted tag currently in use. Powers the tag editor's
+  // nesting-aware autocomplete (Calibre-style).
+  const allKnownTags = useMemo(() => {
+    const s = new Set<string>();
+    for (const v of videos) for (const t of v.user_tags) s.add(t);
     return [...s].sort((a, b) => a.localeCompare(b));
   }, [videos]);
 
@@ -1575,11 +1479,6 @@ function App() {
     if (filter.kind !== "channel") return null;
     return channels.find((c) => c.id === filter.channelId) ?? null;
   }, [channels, filter]);
-
-  const currentPlaylist = useMemo(() => {
-    if (filter.kind !== "playlist") return null;
-    return playlists.find((p) => p.id === filter.playlistId) ?? null;
-  }, [playlists, filter]);
 
   // ---------------------------------------------------------------------------
   // Top-of-app handlers
@@ -1725,7 +1624,6 @@ function App() {
         <Sidebar
           videos={videos}
           channels={channels}
-          playlists={playlists}
           inboxCount={inboxCount}
           filter={filter}
           onFilter={setFilter}
@@ -1733,11 +1631,6 @@ function App() {
           refreshing={refreshing}
           onFollowClick={() => setFollowOpen((x) => !x)}
           draggingVideo={draggingVideo}
-          onCreatePlaylist={(name) => handleCreatePlaylist(name)}
-          onRenamePlaylist={handleRenamePlaylist}
-          onDeletePlaylist={handleDeletePlaylist}
-          onDropVideoToPlaylist={handleDropVideoToPlaylist}
-          onDropUrlToPlaylist={handleDropUrlToPlaylist}
           onDropToFolder={(id, folder) => {
             const v = videos.find((x) => x.id === id);
             if (v) handleSetFolder(v, folder);
@@ -1746,6 +1639,9 @@ function App() {
             const v = videos.find((x) => x.id === id);
             if (v) handleAddTag(v, tag);
           }}
+          onDropUrlToTag={handleDropUrlToTag}
+          onRenameTag={handleRenameTag}
+          onDeleteTag={handleDeleteTag}
           onDropToFavorites={(id) => {
             const v = videos.find((x) => x.id === id);
             if (v && !v.favorite) handleToggleFavorite(v);
@@ -1975,24 +1871,6 @@ function App() {
             </div>
           )}
 
-          {filter.kind === "playlist" && currentPlaylist && (
-            <div className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2 flex items-center gap-3">
-              <div className="text-[13px] flex-1 truncate">
-                <span className="font-semibold">{currentPlaylist.name}</span>
-                <span className="ml-2 text-[11.5px] text-[var(--color-ink-faint)]">
-                  {currentPlaylist.video_count}{" "}
-                  {currentPlaylist.video_count === 1 ? "video" : "videos"}
-                </span>
-              </div>
-              <button
-                onClick={() => handleDeletePlaylist(currentPlaylist.id)}
-                className="text-[11.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] transition"
-              >
-                Delete playlist
-              </button>
-            </div>
-          )}
-
           <div className="flex-1 min-h-0 flex">
             <section className="flex-1 min-w-0 overflow-y-auto">
               {pending.length > 0 && (
@@ -2053,15 +1931,19 @@ function App() {
                       </div>
                       <div className="px-5 pt-3 space-y-2">
                         {items.map((cv) => (
-                          <InboxRow
-                            key={cv.id}
-                            cv={cv}
-                            busy={inboxBusy.has(cv.id)}
-                            showChannelName={false}
-                            onAdd={wrapInbox(cv, handleAddFromInbox)}
-                            onDismiss={wrapInbox(cv, handleDismissInboxItem)}
-                            onOpen={() => handleOpenInboxItem(cv)}
-                          />
+                          // Wrapper carries the id the SearchPalette pick path
+                          // scrolls to (`#inbox-row-<cv.id>`). Keep the wrapper
+                          // outside InboxRow so the row internals stay agnostic.
+                          <div key={cv.id} id={`inbox-row-${cv.id}`}>
+                            <InboxRow
+                              cv={cv}
+                              busy={inboxBusy.has(cv.id)}
+                              showChannelName={false}
+                              onAdd={wrapInbox(cv, handleAddFromInbox)}
+                              onDismiss={wrapInbox(cv, handleDismissInboxItem)}
+                              onOpen={() => handleOpenInboxItem(cv)}
+                            />
+                          </div>
                         ))}
                       </div>
                     </section>
@@ -2146,15 +2028,12 @@ function App() {
                     <MultiVideoDetails
                       videos={selectedVideos}
                       knownFolders={knownFolders}
-                      playlists={playlists}
+                      allTags={allKnownTags}
                       onSetWatched={handleSetWatchedMany}
                       onSetFavorite={handleSetFavoriteMany}
                       onSetFolder={handleSetFolderMany}
                       onAddTag={handleAddTagMany}
                       onRemoveTag={handleRemoveTagMany}
-                      onAddToPlaylist={handleAddVideosToPlaylist}
-                      onRemoveFromPlaylist={handleRemoveVideosFromPlaylist}
-                      onCreatePlaylist={handleCreatePlaylist}
                       onDeleteAll={handleDeleteVideos}
                       onClearSelection={clearSelection}
                     />
@@ -2165,18 +2044,14 @@ function App() {
                       video={selectedVideo}
                       knownFolders={knownFolders}
                       followedChannels={channels}
-                      playlists={playlists}
-                      onAddTag={handleAddTag}
-                      onRemoveTag={handleRemoveTag}
+                      allTags={allKnownTags}
+                      onSetTags={handleSetTags}
                       onSetFolder={handleSetFolder}
                       onToggleWatched={handleToggleWatched}
                       onToggleFavorite={handleToggleFavorite}
                       onOpen={handleOpenAndMarkWatched}
                       onRequestDelete={() => handleDeleteVideo(selectedVideo)}
                       onFollowChannel={handleFollowChannelFromVideo}
-                      onAddToPlaylist={(vids, pid) => handleAddVideosToPlaylist(vids, pid)}
-                      onRemoveFromPlaylist={(vids, pid) => handleRemoveVideosFromPlaylist(vids, pid)}
-                      onCreatePlaylist={handleCreatePlaylist}
                     />
                   </div>
                 ) : (
@@ -2211,18 +2086,33 @@ function App() {
       <SearchPalette
         open={searchOpen}
         videos={videos}
+        channelVideos={inbox}
         onClose={() => setSearchOpen(false)}
-        onPick={(v) => {
-          // Reset filters so the chosen video is visible in the main list,
-          // then select it. A useEffect (below the main render block) scrolls
-          // it into view on the next paint.
+        onPick={(pick) => {
           setSearch("");
-          if (filter.kind === "inbox") setFilter({ kind: "all" });
-          selectSingle(v.id);
-          requestAnimationFrame(() => {
-            const el = document.getElementById(`video-row-${v.id}`);
-            el?.scrollIntoView({ behavior: "smooth", block: "center" });
-          });
+          if (pick.kind === "library") {
+            // Library hit: route to All Videos so the row is guaranteed visible
+            // regardless of the user's current filter (tag, folder, channel,
+            // favorites, etc.). Then select + scroll.
+            if (filter.kind !== "all") setFilter({ kind: "all" });
+            selectSingle(pick.video.id);
+            requestAnimationFrame(() => {
+              const el = document.getElementById(`video-row-${pick.video.id}`);
+              el?.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+          } else {
+            // Channel-inbox hit: switch to the parent channel's filter so the
+            // "New from this channel" section is the focal view, then scroll
+            // to the inbox row. setTimeout lets the new filter's DOM mount
+            // before we try to find the row (rAF alone fires too early when
+            // the filter switch causes a fresh InboxView render).
+            const cv = pick.cv;
+            setFilter({ kind: "channel", channelId: cv.channel_id });
+            setTimeout(() => {
+              const el = document.getElementById(`inbox-row-${cv.id}`);
+              el?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 80);
+          }
         }}
       />
 
@@ -2334,20 +2224,6 @@ function EmptyState({
     );
   }
 
-  if (filter.kind === "playlist") {
-    return (
-      <CenteredEmpty
-        title={q ? "No matches in this playlist" : "This playlist is empty"}
-        body={
-          q
-            ? `Nothing in this playlist matches “${q}”.`
-            : "Drag videos onto this playlist in the sidebar, drop a video URL onto it, or use “Add to playlist” in a video's details."
-        }
-        action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
-      />
-    );
-  }
-
   if (filter.kind === "watched") {
     return (
       <CenteredEmpty
@@ -2402,20 +2278,6 @@ function EmptyState({
           q
             ? `Nothing in this category matches “${q}”.`
             : `This category came from a video's metadata — none currently match.`
-        }
-        action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
-      />
-    );
-  }
-
-  if (filter.kind === "source") {
-    return (
-      <CenteredEmpty
-        title={`No videos from ${filter.name}`}
-        body={
-          q
-            ? `Nothing from ${filter.name} matches “${q}”.`
-            : `You haven't added any ${filter.name} videos yet.`
         }
         action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
       />
