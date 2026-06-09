@@ -47,7 +47,10 @@ jobs:
           - name: "Linux"
             runner: "ubuntu-22.04"
             target: "x86_64-unknown-linux-gnu"
-            args: ""
+            # deb + rpm only. The AppImage bundler runs linuxdeploy, which scans
+            # every ELF in the AppDir and fails on the bundled CPython runtime's
+            # binaries/.so files. deb and rpm package the same tree fine.
+            args: "--bundles deb,rpm"
             ffmpeg_name: "ffmpeg-x86_64-unknown-linux-gnu"
             ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64"
 

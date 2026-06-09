@@ -2237,6 +2237,7 @@ function App() {
                   dismissingAll={bulkDismissingScope === "inbox-global"}
                   refreshing={refreshing}
                   onRefresh={handleRefresh}
+                  onDragStateChange={setDraggingVideo}
                 />
               ) : filter.kind === "channel" &&
                 (filtered.length > 0 || channelInboxItems.length > 0) ? (
@@ -2269,6 +2270,7 @@ function App() {
                               onAdd={wrapInbox(cv, handleAddFromInbox)}
                               onDismiss={wrapInbox(cv, handleDismissInboxItem)}
                               onOpen={() => handleOpenInboxItem(cv)}
+                              onDragStateChange={setDraggingVideo}
                             />
                           </div>
                         ))}

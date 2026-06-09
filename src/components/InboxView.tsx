@@ -21,6 +21,7 @@ type Props = {
   dismissingAll: boolean;
   refreshing: boolean;
   onRefresh: () => void;
+  onDragStateChange?: (dragging: boolean) => void;
 };
 
 const BUCKET_HINTS: Record<RecencyBucket, string> = {
@@ -43,6 +44,7 @@ export function InboxView({
   dismissingAll,
   refreshing,
   onRefresh,
+  onDragStateChange,
 }: Props) {
   const isFiltered = searchQuery.trim().length > 0;
   const [busy, setBusy] = useState<Set<number>>(new Set());
@@ -205,6 +207,7 @@ export function InboxView({
                     onAdd={wrap(cv.id, () => onAdd(cv))}
                     onDismiss={wrap(cv.id, () => onDismiss(cv))}
                     onOpen={() => onOpen(cv)}
+                    onDragStateChange={onDragStateChange}
                   />
                 ))}
               </div>

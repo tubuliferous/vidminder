@@ -9,6 +9,7 @@ type Props = {
   onAdd: () => void;
   onDismiss: () => void;
   onOpen: () => void;
+  onDragStateChange?: (dragging: boolean) => void;
 };
 
 export function InboxRow({
@@ -18,6 +19,7 @@ export function InboxRow({
   onAdd,
   onDismiss,
   onOpen,
+  onDragStateChange,
 }: Props) {
   const dur = formatDuration(cv.duration);
   const isUnseen = cv.seen_at == null;
@@ -31,12 +33,15 @@ export function InboxRow({
     <div
       draggable
       onDragStart={(e) => {
-        // Carry the watch URL so dropping onto a tag folder adds the video to
-        // the library under that tag (handled by the sidebar's URL-drop path).
+        // Carry the watch URL so dropping onto a tag folder (or anywhere in the
+        // window) adds the video to the library — the sidebar's URL-drop path
+        // and the global drop-to-add handler both read it.
         e.dataTransfer.effectAllowed = "copy";
         e.dataTransfer.setData("text/uri-list", cv.url);
         e.dataTransfer.setData("text/plain", cv.url);
+        onDragStateChange?.(true);
       }}
+      onDragEnd={() => onDragStateChange?.(false)}
       onDoubleClick={onOpen}
       title="Double-click anywhere to play in browser · drag onto a tag to add it there"
       className={
@@ -59,6 +64,10 @@ export function InboxRow({
             src={cv.thumbnail_url}
             alt=""
             referrerPolicy="no-referrer"
+            // Without this, grabbing the thumbnail starts a native *image* drag
+            // (WKWebView), which overwrites text/uri-list with the thumbnail URL
+            // — so the row's watch-URL payload is lost and the drop is rejected.
+            draggable={false}
             className="w-full h-full object-cover"
             loading="lazy"
           />

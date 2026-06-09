@@ -37,14 +37,14 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-start justify-center pt-24 bg-black/45 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-start justify-center pt-16 pb-8 bg-black/45 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-w-[92vw] rounded-xl border border-line bg-surface shadow-2xl p-6"
+        className="w-[520px] max-w-[92vw] max-h-[calc(100vh-6rem)] flex flex-col rounded-xl border border-line bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between p-6 pb-4 border-b border-line shrink-0">
           <div>
             <h2 className="text-[16px] font-semibold leading-none">Settings</h2>
             <div className="text-[11.5px] text-ink-faint mt-1">
@@ -60,6 +60,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
           </button>
         </div>
 
+        <div className="overflow-y-auto p-6">
         <section className="space-y-2">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint">
             Appearance
@@ -219,6 +220,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
             <li>{kbd("Z")} undoes any change · Delete removes the highlighted video · {kbd("Delete")} deletes the selected tag folder.</li>
           </ul>
         </section>
+        </div>
       </div>
     </div>
   );
