@@ -1,6 +1,6 @@
 [package]
 name = "vidminder"
-version = "0.2.10"
+version = "0.2.11"
 description = "VidMinder - drop URLs, keep a calm pool of videos to watch later"
 authors = ["VidMinder"]
 edition = "2021"

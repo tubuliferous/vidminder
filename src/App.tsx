@@ -92,7 +92,11 @@ function sortOptionsFor(kind: Filter["kind"]): SortMode[] {
 }
 
 /** Sort a channel's inbox items by the active mode ("added" never applies). */
-function sortChannelVideos(items: ChannelVideo[], mode: SortMode): ChannelVideo[] {
+function sortChannelVideos(
+  items: ChannelVideo[],
+  mode: SortMode,
+  dir: "desc" | "asc"
+): ChannelVideo[] {
   const arr = [...items];
   if (mode === "length") {
     arr.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1));
@@ -102,6 +106,7 @@ function sortChannelVideos(items: ChannelVideo[], mode: SortMode): ChannelVideo[
     const key = (cv: ChannelVideo) => cv.upload_timestamp ?? cv.first_seen_at;
     arr.sort((a, b) => key(b) - key(a));
   }
+  if (dir === "asc") arr.reverse();
   return arr;
 }
 
@@ -136,6 +141,9 @@ function App() {
   const [followInput, setFollowInput] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("added");
+  // Sort direction. "desc" = the natural default for every mode (newest /
+  // longest first); "asc" flips it (oldest / shortest first).
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
@@ -1666,8 +1674,10 @@ function App() {
     } else {
       matched.sort((a, b) => b.added_at - a.added_at);
     }
+    // Comparators above are all newest/longest-first (desc); flip for asc.
+    if (sortDir === "asc") matched.reverse();
     return matched;
-  }, [videos, channels, filter, search, effectiveSortMode, settings.showShorts]);
+  }, [videos, channels, filter, search, effectiveSortMode, sortDir, settings.showShorts]);
 
   // Every distinct full dotted tag currently in use. Powers the tag editor's
   // nesting-aware autocomplete (Calibre-style).
@@ -1704,8 +1714,8 @@ function App() {
     const items = searchedInboxItems.filter(
       (cv) => cv.channel_id === filter.channelId
     );
-    return sortChannelVideos(items, effectiveSortMode);
-  }, [filter, searchedInboxItems, effectiveSortMode]);
+    return sortChannelVideos(items, effectiveSortMode, sortDir);
+  }, [filter, searchedInboxItems, effectiveSortMode, sortDir]);
 
   const channelInboxGrouped = useMemo(() => {
     if (channelInboxItems.length === 0)
@@ -2039,6 +2049,20 @@ function App() {
                     </option>
                   ))}
                 </select>
+                <button
+                  onClick={() =>
+                    setSortDir((d) => (d === "desc" ? "asc" : "desc"))
+                  }
+                  className="self-stretch flex items-center justify-center px-2 rounded-md bg-canvas border border-line text-ink-dim hover:text-ink hover:border-line-soft focus:outline-none focus:border-accent transition"
+                  title={
+                    sortDir === "desc"
+                      ? "Descending (greatest first) — click for ascending"
+                      : "Ascending (least first) — click for descending"
+                  }
+                  aria-label="Toggle sort direction"
+                >
+                  {sortDir === "desc" ? "↓" : "↑"}
+                </button>
               </label>
             )}
             <button
@@ -2526,7 +2550,7 @@ function App() {
         }}
       />
 
-      <div className="absolute bottom-3 right-3 z-40 flex flex-col gap-2 max-w-sm pointer-events-none">
+      <div className="fixed bottom-3 right-3 z-40 flex flex-col gap-2 max-w-sm pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}
