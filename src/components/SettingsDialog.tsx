@@ -190,6 +190,23 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
               </span>
             </span>
           </label>
+
+          <label className="flex items-start gap-3 cursor-pointer mt-3">
+            <input
+              type="checkbox"
+              checked={settings.showShorts}
+              onChange={(e) => onChange({ showShorts: e.target.checked })}
+              className="mt-0.5 w-4 h-4 accent-accent"
+            />
+            <span>
+              <span className="text-[13px] block">Show Shorts in lists</span>
+              <span className="text-[11.5px] text-ink-faint">
+                YouTube Shorts are always fetched in the background; turn this on to
+                show them in the inbox and library. They never count toward the “new”
+                badge.
+              </span>
+            </span>
+          </label>
         </section>
 
         <section className="mt-6 pt-5 border-t border-line text-[11.5px] text-ink-faint leading-relaxed">
@@ -199,7 +216,7 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
             <li>Drop a channel URL (<code className="text-ink-dim">youtube.com/@channel</code>) to follow it.</li>
             <li>Drag videos onto a tag or Favorites in the sidebar.</li>
             <li>Enter opens the selected video on YouTube · double-click plays the download if there is one.</li>
-            <li>{kbd("Z")} undoes any change · Delete removes the highlighted video.</li>
+            <li>{kbd("Z")} undoes any change · Delete removes the highlighted video · {kbd("Delete")} deletes the selected tag folder.</li>
           </ul>
         </section>
       </div>

@@ -69,11 +69,22 @@ This repo is large; a few habits keep context and cost under control.
 
 ## Other project notes
 
-- The yt-dlp sidecar lives at `src-tauri/binaries/yt-dlp-<target-triple>` and
-  ffmpeg at `src-tauri/binaries/ffmpeg-<target-triple>`. Run
-  `npm run install-sidecar` after a fresh clone (symlinks yt-dlp from PATH;
-  always downloads a self-contained **static** ffmpeg so the bundle ships
-  complete and doesn't depend on a system/Homebrew ffmpeg).
+- **yt-dlp runs via a bundled Python runtime, not a standalone binary.**
+  `src-tauri/runtime/python/` is a relocatable CPython
+  (astral-sh/python-build-standalone) and `src-tauri/runtime/pylib/` is yt-dlp +
+  certifi pip-installed into it; we shell out as `python -m yt_dlp`. This
+  replaced the old `yt-dlp_macos` PyInstaller binary, whose ~13s-per-call cold
+  start made every add/follow painfully slow on shipped (esp. Intel) builds —
+  the relocatable interpreter starts in ~0.3s. The runtime is bundled as a Tauri
+  **resource** (`bundle.resources` → `<resource_dir>/runtime/`); `ytdlp.rs`
+  resolves it via `set_resource_dir()` (prod) or `CARGO_MANIFEST_DIR/runtime`
+  (dev). Keep `PBS_TAG`/`PY_VER` in lock-step between
+  `scripts/install-sidecar.mjs` and `.github/workflows/release.yml`.
+- ffmpeg is still a Tauri **externalBin** sidecar at
+  `src-tauri/binaries/ffmpeg-<target-triple>` (a single self-contained static
+  binary). Run `npm run install-sidecar` after a fresh clone — it downloads the
+  static ffmpeg **and** sets up `src-tauri/runtime/` (CPython + yt-dlp) so the
+  bundle ships complete and depends on neither a system Python nor ffmpeg.
 - Dev: `npm run tauri dev` from project root.
 - Release: bump `package.json`, `src-tauri/Cargo.toml`, and
   `src-tauri/tauri.conf.json` to the same version; commit; tag `vX.Y.Z`;

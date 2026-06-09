@@ -1,15 +1,22 @@
 #!/usr/bin/env node
-// Install the yt-dlp + ffmpeg sidecar binaries for the current host so
-// `tauri dev` and `tauri build` can satisfy the externalBin requirement.
+// Set up the binaries VidMinder shells out to so `tauri dev` / `tauri build`
+// work on a fresh clone:
 //
-// On macOS/Linux, this prefers symlinking whatever is already on PATH (fast,
-// stays up to date with brew/apt). If nothing is on PATH it downloads a static
-// build — yt-dlp from its own GitHub releases, ffmpeg from the pinned
-// eugeneware/ffmpeg-static release (which ships per-platform static binaries).
+//   1. ffmpeg — a single self-contained static binary, bundled as a Tauri
+//      externalBin sidecar (next to the app executable). Used to mux the
+//      separate video+audio DASH streams YouTube serves above ~720p.
 //
-// Run with: `node scripts/install-sidecar.mjs`
+//   2. A Python runtime — a relocatable CPython (python-build-standalone) with
+//      yt-dlp pip-installed into it, bundled as a Tauri *resource* directory.
+//      We run it as `python -m yt_dlp`. This replaces the old `yt-dlp_macos`
+//      PyInstaller "onefile" binary, whose ~13s-per-invocation cold start made
+//      adding videos and following channels painfully slow (it unpacked a whole
+//      Python runtime to a temp dir on every single call). The relocatable
+//      interpreter starts in ~0.3s instead.
+//
+// Run with: `node scripts/install-sidecar.mjs`  (npm run install-sidecar)
 
-import { mkdirSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, existsSync, chmodSync, rmSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { platform, arch } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,6 +29,10 @@ const p = platform();
 const a = arch();
 const ext = p === "win32" ? ".exe" : "";
 
+// Keep these in lock-step with .github/workflows/release.yml.
+const PBS_TAG = "20260602";
+const PY_VERSION = "3.12.13";
+
 function targetTriple() {
   if (p === "win32") return "x86_64-pc-windows-msvc";
   if (p === "darwin" && a === "arm64") return "aarch64-apple-darwin";
@@ -32,14 +43,10 @@ function targetTriple() {
 
 const triple = targetTriple();
 const binDir = join(repoRoot, "src-tauri", "binaries");
+const runtimeDir = join(repoRoot, "src-tauri", "runtime");
 
-function ytDlpUrl() {
-  if (p === "win32") return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
-  if (p === "darwin") return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
-  return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
-}
+// ---- ffmpeg sidecar -------------------------------------------------------
 
-// Pinned static-ffmpeg release. Assets are direct per-platform binaries.
 const FFMPEG_STATIC_TAG = "b6.0";
 function ffmpegUrl() {
   const base = `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_TAG}`;
@@ -48,40 +55,73 @@ function ffmpegUrl() {
   return `${base}/ffmpeg-linux-x64`;
 }
 
-// Install one sidecar to `binaries/<name>-<triple><ext>`. By default this
-// prefers symlinking whatever is on PATH (fast, stays current). Pass
-// `forceDownload` to always fetch the standalone build instead — needed for
-// ffmpeg, where a PATH copy is typically a dynamically-linked Homebrew binary
-// that depends on dylibs not present in the shipped bundle (so it'd break on
-// other machines). The pinned static build is fully self-contained.
-function install(name, url, { forceDownload = false } = {}) {
-  const outPath = join(binDir, `${name}-${triple}${ext}`);
+// The pinned static ffmpeg build is fully self-contained, so we always download
+// it rather than symlinking a (typically dynamically-linked) Homebrew copy that
+// would break once the bundle is shipped to another machine.
+function installFfmpeg() {
+  const outPath = join(binDir, `ffmpeg-${triple}${ext}`);
   if (existsSync(outPath)) {
-    console.log(`${name} sidecar already present: ${outPath}`);
+    console.log(`ffmpeg sidecar already present: ${outPath}`);
     return;
   }
   mkdirSync(binDir, { recursive: true });
-
-  if (!forceDownload && p !== "win32") {
-    try {
-      const which = execSync(`command -v ${name}`, { encoding: "utf8" }).trim();
-      if (which) {
-        execSync(`ln -sf "${which}" "${outPath}"`);
-        console.log(`Symlinked ${name} from ${which} → ${outPath}`);
-        return;
-      }
-    } catch {
-      // fall through to download
-    }
-  }
-
-  console.log(`Downloading ${name} from ${url}…`);
+  const url = ffmpegUrl();
+  console.log(`Downloading ffmpeg from ${url}…`);
   execSync(`curl -L --fail -o "${outPath}" "${url}"`, { stdio: "inherit" });
   if (p !== "win32") chmodSync(outPath, 0o755);
-  console.log(`Saved ${name} sidecar to ${outPath}`);
+  console.log(`Saved ffmpeg sidecar to ${outPath}`);
 }
 
-install("yt-dlp", ytDlpUrl());
-// Always download a self-contained static ffmpeg — never symlink a Homebrew
-// one — so the bundle ships complete and dev matches production exactly.
-install("ffmpeg", ffmpegUrl(), { forceDownload: true });
+// ---- Python + yt-dlp runtime ---------------------------------------------
+
+function pbsUrl() {
+  return (
+    `https://github.com/astral-sh/python-build-standalone/releases/download/` +
+    `${PBS_TAG}/cpython-${PY_VERSION}+${PBS_TAG}-${triple}-install_only.tar.gz`
+  );
+}
+
+function pythonExe() {
+  return p === "win32"
+    ? join(runtimeDir, "python", "python.exe")
+    : join(runtimeDir, "python", "bin", "python3");
+}
+
+function installRuntime() {
+  const pylibDir = join(runtimeDir, "pylib");
+  if (existsSync(pylibDir) && existsSync(join(runtimeDir, "python"))) {
+    console.log(`Python runtime already present: ${runtimeDir}`);
+    return;
+  }
+  mkdirSync(runtimeDir, { recursive: true });
+
+  // 1. Relocatable CPython for this host (extracts to runtime/python/).
+  const url = pbsUrl();
+  const tgz = join(runtimeDir, "python.tar.gz");
+  console.log(`Downloading CPython ${PY_VERSION} from ${url}…`);
+  execSync(`curl -L --fail -o "${tgz}" "${url}"`, { stdio: "inherit" });
+  execSync(`tar -xzf "${tgz}" -C "${runtimeDir}"`, { stdio: "inherit" });
+  rmSync(tgz, { force: true });
+
+  // 2. yt-dlp + certifi into runtime/pylib (pure-Python, arch-independent). We
+  //    run it via `python -m yt_dlp` with PYTHONPATH=pylib. certifi gives the
+  //    relocatable interpreter a CA bundle so HTTPS verification works. Do this
+  //    before stripping symlinks, since the bundled python3 is one of them.
+  const py = pythonExe();
+  console.log("Installing yt-dlp + certifi into runtime/pylib…");
+  execSync(
+    `"${py}" -m pip install --target "${pylibDir}" --no-compile --upgrade yt-dlp certifi`,
+    { stdio: "inherit" }
+  );
+
+  // Drop the convenience symlinks pbs ships (python3 -> python3.12, etc.). We
+  // invoke the real versioned binary directly, and a symlink-free tree can't be
+  // mangled by any platform's resource bundler.
+  if (p !== "win32") {
+    execSync(`find "${join(runtimeDir, "python")}" -type l -delete`);
+  }
+  console.log(`Python runtime ready: ${runtimeDir}`);
+}
+
+installFfmpeg();
+installRuntime();

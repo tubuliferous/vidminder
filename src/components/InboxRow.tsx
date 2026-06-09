@@ -29,17 +29,25 @@ export function InboxRow({
   const showNewBadge = isUnseen && isFresh;
   return (
     <div
+      draggable
+      onDragStart={(e) => {
+        // Carry the watch URL so dropping onto a tag folder adds the video to
+        // the library under that tag (handled by the sidebar's URL-drop path).
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData("text/uri-list", cv.url);
+        e.dataTransfer.setData("text/plain", cv.url);
+      }}
+      onDoubleClick={onOpen}
+      title="Double-click anywhere to play in browser · drag onto a tag to add it there"
       className={
-        "flex gap-3 p-2.5 rounded-md border transition group " +
+        "flex gap-3 p-2.5 rounded-md border transition group cursor-pointer " +
         (showNewBadge
           ? "bg-surface border-line hover:border-line-soft"
           : "bg-surface/60 border-line/50 hover:border-line-soft")
       }
     >
       <div
-        onDoubleClick={onOpen}
-        className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-surface-2 cursor-pointer"
-        title="Double-click to play in browser (marks as seen)"
+        className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-surface-2"
       >
         {showNewBadge && (
           <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[1px] rounded bg-accent text-black shadow-sm">
@@ -68,10 +76,9 @@ export function InboxRow({
       <div className="flex-1 min-w-0 flex flex-col">
         <div
           className={
-            "text-[13.5px] leading-snug line-clamp-2 cursor-pointer " +
+            "text-[13.5px] leading-snug line-clamp-2 " +
             (isUnseen ? "font-semibold" : "font-normal text-ink-dim")
           }
-          onDoubleClick={onOpen}
         >
           {cv.title}
         </div>
@@ -93,7 +100,10 @@ export function InboxRow({
               "Unknown date"}
           </span>
         </div>
-        <div className="mt-auto pt-2 flex items-center gap-2">
+        <div
+          className="mt-auto pt-2 flex items-center gap-2"
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
           <button
             onClick={onAdd}
             disabled={busy}

@@ -21,8 +21,6 @@ jobs:
             runner: "windows-latest"
             target: "x86_64-pc-windows-msvc"
             args: ""
-            sidecar_name: "yt-dlp-x86_64-pc-windows-msvc.exe"
-            sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
             ffmpeg_name: "ffmpeg-x86_64-pc-windows-msvc.exe"
             # The ffmpeg-static asset has no .exe suffix; we save it as .exe so
             # Tauri's externalBin resolves ffmpeg.exe next to the binary.
@@ -34,8 +32,6 @@ jobs:
             # Actions macOS runners and fails within seconds with no useful
             # error. We zip the .app ourselves in a later step.
             args: "--target aarch64-apple-darwin --bundles app"
-            sidecar_name: "yt-dlp-aarch64-apple-darwin"
-            sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
             ffmpeg_name: "ffmpeg-aarch64-apple-darwin"
             ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-darwin-arm64"
           - name: "macOS (Intel)"
@@ -46,16 +42,12 @@ jobs:
             runner: "macos-latest"
             target: "x86_64-apple-darwin"
             args: "--target x86_64-apple-darwin --bundles app"
-            sidecar_name: "yt-dlp-x86_64-apple-darwin"
-            sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
             ffmpeg_name: "ffmpeg-x86_64-apple-darwin"
             ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-darwin-x64"
           - name: "Linux"
             runner: "ubuntu-22.04"
             target: "x86_64-unknown-linux-gnu"
             args: ""
-            sidecar_name: "yt-dlp-x86_64-unknown-linux-gnu"
-            sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
             ffmpeg_name: "ffmpeg-x86_64-unknown-linux-gnu"
             ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-linux-x64"
 
@@ -78,19 +70,43 @@ jobs:
             libxdo-dev \
             libssl-dev
 
-      - name: Download yt-dlp sidecar (Unix)
+      # Embedded Python runtime: a relocatable CPython (python-build-standalone)
+      # for the *target* triple, plus yt-dlp + certifi pip-installed into a
+      # pure-Python (arch-independent) pylib. Bundled as a Tauri resource and
+      # run as `python -m yt_dlp` — ~0.3s cold start vs ~13s for the old
+      # yt-dlp_macos PyInstaller binary. PBS_TAG/PY_VER are kept in lock-step
+      # with scripts/install-sidecar.mjs.
+      - name: Setup Python runtime (Unix)
         if: matrix.platform.runner != 'windows-latest'
         run: |
-          mkdir -p src-tauri/binaries
-          curl -L --fail -o "src-tauri/binaries/${{ matrix.platform.sidecar_name }}" "${{ matrix.platform.sidecar_url }}"
-          chmod +x "src-tauri/binaries/${{ matrix.platform.sidecar_name }}"
+          set -euo pipefail
+          PBS_TAG=20260602
+          PY_VER=3.12.13
+          TARGET="${{ matrix.platform.target }}"
+          URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PY_VER}+${PBS_TAG}-${TARGET}-install_only.tar.gz"
+          mkdir -p src-tauri/runtime
+          curl -L --fail -o /tmp/py.tar.gz "$URL"
+          tar -xzf /tmp/py.tar.gz -C src-tauri/runtime   # -> src-tauri/runtime/python
+          # Strip pbs's convenience symlinks; a symlink-free tree can't be
+          # mangled by the resource bundler. The interpreter is run by its real
+          # versioned name.
+          find src-tauri/runtime/python -type l -delete
+          # yt-dlp + certifi are py3-none-any wheels, so the host's python3 can
+          # produce a pylib the bundled (target-arch) interpreter loads fine.
+          python3 -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp certifi
 
-      - name: Download yt-dlp sidecar (Windows)
+      - name: Setup Python runtime (Windows)
         if: matrix.platform.runner == 'windows-latest'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
-          Invoke-WebRequest -Uri "${{ matrix.platform.sidecar_url }}" -OutFile "src-tauri/binaries/${{ matrix.platform.sidecar_name }}"
+          $PBS_TAG = "20260602"
+          $PY_VER = "3.12.13"
+          $TARGET = "${{ matrix.platform.target }}"
+          $URL = "https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_TAG/cpython-$PY_VER+$PBS_TAG-$TARGET-install_only.tar.gz"
+          New-Item -ItemType Directory -Force -Path "src-tauri/runtime" | Out-Null
+          Invoke-WebRequest -Uri $URL -OutFile "$env:RUNNER_TEMP/py.tar.gz"
+          tar -xzf "$env:RUNNER_TEMP/py.tar.gz" -C src-tauri/runtime
+          python -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp certifi
 
       - name: Download ffmpeg sidecar (Unix)
         if: matrix.platform.runner != 'windows-latest'

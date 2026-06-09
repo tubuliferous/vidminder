@@ -262,6 +262,16 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
         .channel_id
         .clone()
         .or_else(|| info.uploader_id.clone());
+    // A YouTube Short if any of its URL forms is a /shorts/ link.
+    let is_short = [
+        Some(canonical_url.as_str()),
+        Some(url),
+        info.webpage_url.as_deref(),
+        info.original_url.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|u| u.contains("/shorts/"));
 
     let id = {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
@@ -286,6 +296,7 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
                     raw_tags: &raw_tags,
                     channel_url: channel_url.as_deref(),
                     channel_id: channel_external_id.as_deref(),
+                    is_short,
                 },
             )
             .map_err(|e| AppError::Generic(format!("{e:#}")))?
@@ -369,6 +380,7 @@ async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult
                     upload_date: entry.upload_date.as_deref(),
                     upload_timestamp: ts,
                     dismissed: !is_recent(ts, window_secs),
+                    is_short: entry.is_short,
                 },
             );
         }
@@ -568,6 +580,7 @@ fn add_video_from_channel_video(cv: &db::ChannelVideo, db: &Db) -> AppResult<Vid
             raw_tags: &[],
             channel_url: Some(&channel.url),
             channel_id: channel.channel_id.as_deref(),
+            is_short: cv.is_short,
         },
     )
     .map_err(|e| AppError::Generic(format!("{e:#}")))?;
@@ -764,6 +777,7 @@ async fn catch_up_channel(
                     upload_date: entry.upload_date.as_deref(),
                     upload_timestamp: entry.timestamp,
                     dismissed: false,
+                    is_short: entry.is_short,
                 },
             )
             .unwrap_or(db::UpsertResult {
@@ -974,6 +988,7 @@ fn restore_video(video: Video, db: State<'_, Db>) -> AppResult<Video> {
                 raw_tags: &video.raw_tags,
                 channel_url: video.channel_url.as_deref(),
                 channel_id: video.channel_id.as_deref(),
+                is_short: video.is_short,
             },
             video.added_at,
         )?;
@@ -1196,6 +1211,7 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
                         upload_date: entry.upload_date.as_deref(),
                         upload_timestamp: entry.timestamp,
                         dismissed: false,
+                        is_short: entry.is_short,
                     },
                 )
                 .unwrap_or(db::UpsertResult {
@@ -1285,6 +1301,12 @@ pub fn run() {
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = app.deep_link().register_all();
+            }
+
+            // Tell the yt-dlp layer where bundled resources live so it can find
+            // the embedded Python runtime (<resource_dir>/runtime/).
+            if let Ok(res) = app.path().resource_dir() {
+                ytdlp::set_resource_dir(res);
             }
 
             let database = db::open_db().expect("opening database");

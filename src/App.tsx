@@ -54,8 +54,64 @@ const UNDO_TOAST_MS = 6500;
 const UNDO_TTL_MS = 90_000;
 const UNDO_STACK_MAX = 40;
 
+/** True if tag `t` is `base` or a dotted descendant of it (case-insensitive). */
+function isTagOrSubtag(t: string, base: string): boolean {
+  const lt = t.toLowerCase();
+  const lb = base.toLowerCase();
+  return lt === lb || lt.startsWith(`${lb}.`);
+}
+
+/**
+ * Snapshot the full tag list of every video carrying `base` (or a sub-tag), so
+ * a tag-tree edit (rename/delete) can be reverted by restoring those exact
+ * lists. Correct across merges and capitalization-only changes.
+ */
+function tagAffectedSnapshot(
+  vids: Video[],
+  base: string
+): { id: number; tags: string[] }[] {
+  return vids
+    .filter((v) => v.user_tags.some((t) => isTagOrSubtag(t, base)))
+    .map((v) => ({ id: v.id, tags: [...v.user_tags] }));
+}
+
+const SORT_LABELS: Record<SortMode, string> = {
+  added: "Date added",
+  uploaded: "Upload date",
+  length: "Length",
+};
+
+/**
+ * Which sort options make sense in a given content context. A channel view
+ * lists that channel's uploads (not items the user added to their library), so
+ * "Date added" is irrelevant there.
+ */
+function sortOptionsFor(kind: Filter["kind"]): SortMode[] {
+  if (kind === "channel") return ["uploaded", "length"];
+  return ["added", "uploaded", "length"];
+}
+
+/** Sort a channel's inbox items by the active mode ("added" never applies). */
+function sortChannelVideos(items: ChannelVideo[], mode: SortMode): ChannelVideo[] {
+  const arr = [...items];
+  if (mode === "length") {
+    arr.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1));
+  } else {
+    // "uploaded": mirror the inbox SQL order, COALESCE(upload_timestamp,
+    // first_seen_at) DESC.
+    const key = (cv: ChannelVideo) => cv.upload_timestamp ?? cv.first_seen_at;
+    arr.sort((a, b) => key(b) - key(a));
+  }
+  return arr;
+}
+
 function App() {
   const [videos, setVideos] = useState<Video[]>([]);
+  // Always-current snapshot of `videos` for handlers that need to read the full
+  // library without taking `videos` as a dependency (e.g. recording undo state
+  // for tag-tree operations).
+  const videosRef = useRef<Video[]>([]);
+  videosRef.current = videos;
   const [channels, setChannels] = useState<Channel[]>([]);
   const [inbox, setInbox] = useState<ChannelVideo[]>([]);
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
@@ -69,6 +125,9 @@ function App() {
   const dragRangeAnchor = useRef<number | null>(null);
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
+  // Channel URLs currently being followed via a Follow button (not the add
+  // bar), so the button can show a busy state while the request is in flight.
+  const [followingUrls, setFollowingUrls] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [dragHover, setDragHover] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -657,11 +716,30 @@ function App() {
   // "foo.bar.baz", … in one shot. Rename re-paths the whole subtree.
   // -----------------------------------------------------------------------
 
+  // Undo for tag-tree edits: rewrite each affected video's tags back to its
+  // snapshot, then resync from the backend.
+  const restoreTagSnapshot = useCallback(
+    async (snapshot: { id: number; tags: string[] }[]) => {
+      await Promise.all(snapshot.map((s) => api.setVideoTags(s.id, s.tags)));
+      try {
+        const fresh = await api.listVideos();
+        setVideos(fresh);
+      } catch {
+        /* non-fatal — next event will resync */
+      }
+    },
+    []
+  );
+
   const handleRenameTag = useCallback(
     async (oldTag: string, newTag: string) => {
       const a = oldTag.trim();
       const b = newTag.trim();
       if (!a || !b || a === b) return;
+      // Snapshot the full tag list of every video the rename will touch, so undo
+      // can restore them exactly (robust even if the rename merged into an
+      // existing tag or only changed capitalization).
+      const affected = tagAffectedSnapshot(videosRef.current, a);
       try {
         await api.renameTag(a, b);
       } catch (e) {
@@ -685,13 +763,16 @@ function App() {
           setFilter({ kind: "tag", name: b + filter.name.slice(a.length) });
         }
       }
-      pushToast({ kind: "ok", text: `Renamed “${a}” → “${b}”` });
+      recordUndo(`Renamed “${a}” → “${b}”`, () => restoreTagSnapshot(affected));
     },
-    [filter, pushToast]
+    [filter, pushToast, recordUndo, restoreTagSnapshot]
   );
 
   const handleDeleteTag = useCallback(
     async (tag: string) => {
+      // Snapshot every video carrying this tag (or a sub-tag) before deletion so
+      // undo can restore the exact tag lists.
+      const affected = tagAffectedSnapshot(videosRef.current, tag);
       try {
         await api.deleteTag(tag);
       } catch (e) {
@@ -710,9 +791,9 @@ function App() {
       ) {
         setFilter({ kind: "all" });
       }
-      pushToast({ kind: "ok", text: `Deleted tag “${tag}”` });
+      recordUndo(`Deleted tag “${tag}”`, () => restoreTagSnapshot(affected));
     },
-    [filter, pushToast]
+    [filter, pushToast, recordUndo, restoreTagSnapshot]
   );
 
   // Dropping a URL onto a tag node: ingest the video into the library, then
@@ -1023,9 +1104,18 @@ function App() {
 
   const handleFollowChannelFromVideo = useCallback(
     async (video: Video) => {
-      if (!video.channel_url) return;
+      const channelUrl = video.channel_url;
+      if (!channelUrl) return;
+      // Show the same in-progress indicator as adding a link by paste: a global
+      // "Following …" row, plus a local busy state on the button itself.
+      const pendId = uid();
+      setPending((p) => [
+        ...p,
+        { id: pendId, url: video.uploader ?? channelUrl, kind: "channel" },
+      ]);
+      setFollowingUrls((s) => new Set(s).add(channelUrl));
       try {
-        const ch = await api.followChannel(video.channel_url);
+        const ch = await api.followChannel(channelUrl);
         setChannels((prev) => {
           const without = prev.filter((c) => c.id !== ch.id);
           return [...without, ch].sort((a, b) => a.name.localeCompare(b.name));
@@ -1038,6 +1128,13 @@ function App() {
         });
       } catch (e) {
         pushToast({ kind: "err", text: String(e) });
+      } finally {
+        setPending((p) => p.filter((x) => x.id !== pendId));
+        setFollowingUrls((s) => {
+          const next = new Set(s);
+          next.delete(channelUrl);
+          return next;
+        });
       }
     },
     [pushToast, recordUndo, refreshInbox]
@@ -1426,6 +1523,17 @@ function App() {
         return;
       }
 
+      // ⌘/Ctrl+Delete (or Backspace) deletes the active tag folder — the tag and
+      // all its sub-tags, from every video. Undoable via the toast / ⌘Z.
+      if (meta && (e.key === "Delete" || e.key === "Backspace")) {
+        if (inField) return;
+        if (filter.kind === "tag") {
+          e.preventDefault();
+          handleDeleteTag(filter.name);
+        }
+        return;
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         if (e.metaKey || e.ctrlKey || e.altKey || inField) return;
         if (selectedVideos.length === 0) return;
@@ -1457,6 +1565,8 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     clearSelection,
+    filter,
+    handleDeleteTag,
     handleDeleteVideos,
     handleOpenAndMarkWatched,
     selectedIds,
@@ -1471,9 +1581,20 @@ function App() {
   // Derived state
   // ---------------------------------------------------------------------------
 
+  // Surface only the sort options relevant to the current context, and fall
+  // back to that context's default when the stored mode doesn't apply (e.g.
+  // "Date added" while viewing a channel) — without clobbering the user's
+  // library preference.
+  const sortOptions = useMemo(() => sortOptionsFor(filter.kind), [filter.kind]);
+  const effectiveSortMode: SortMode = sortOptions.includes(sortMode)
+    ? sortMode
+    : sortOptions[0];
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const matched = videos.filter((v) => {
+      // Shorts are fetched but hidden unless the preference is on.
+      if (v.is_short && !settings.showShorts) return false;
       switch (filter.kind) {
         case "all":
           break;
@@ -1537,16 +1658,16 @@ function App() {
       v.upload_date && /^\d{8}/.test(v.upload_date)
         ? parseInt(v.upload_date.slice(0, 8), 10)
         : 0;
-    if (sortMode === "uploaded") {
+    if (effectiveSortMode === "uploaded") {
       matched.sort((a, b) => uploadKey(b) - uploadKey(a) || b.added_at - a.added_at);
-    } else if (sortMode === "length") {
+    } else if (effectiveSortMode === "length") {
       // Longest first; videos with no known duration sink to the bottom.
       matched.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || b.added_at - a.added_at);
     } else {
       matched.sort((a, b) => b.added_at - a.added_at);
     }
     return matched;
-  }, [videos, channels, filter, search, sortMode]);
+  }, [videos, channels, filter, search, effectiveSortMode, settings.showShorts]);
 
   // Every distinct full dotted tag currently in use. Powers the tag editor's
   // nesting-aware autocomplete (Calibre-style).
@@ -1557,8 +1678,14 @@ function App() {
   }, [videos]);
 
   const visibleInboxItems = useMemo(
-    () => inbox.filter((cv) => !cv.in_library && !cv.dismissed),
-    [inbox]
+    () =>
+      inbox.filter(
+        (cv) =>
+          !cv.in_library &&
+          !cv.dismissed &&
+          (settings.showShorts || !cv.is_short)
+      ),
+    [inbox, settings.showShorts]
   );
 
   const searchedInboxItems = useMemo(() => {
@@ -1574,12 +1701,22 @@ function App() {
 
   const channelInboxItems = useMemo(() => {
     if (filter.kind !== "channel") return [];
-    return searchedInboxItems.filter((cv) => cv.channel_id === filter.channelId);
-  }, [filter, searchedInboxItems]);
+    const items = searchedInboxItems.filter(
+      (cv) => cv.channel_id === filter.channelId
+    );
+    return sortChannelVideos(items, effectiveSortMode);
+  }, [filter, searchedInboxItems, effectiveSortMode]);
 
   const channelInboxGrouped = useMemo(() => {
     if (channelInboxItems.length === 0)
-      return [] as { bucket: (typeof RECENCY_ORDER)[number]; items: typeof channelInboxItems }[];
+      return [] as { label: string; items: typeof channelInboxItems }[];
+    // The default "Upload date" view keeps the recency buckets (Today / This
+    // week / …). Any other sort (e.g. Length) wants a single globally-sorted
+    // list — channelInboxItems is already ordered by the active mode.
+    if (effectiveSortMode !== "uploaded") {
+      const label = effectiveSortMode === "length" ? "Longest first" : SORT_LABELS[effectiveSortMode];
+      return [{ label, items: channelInboxItems }];
+    }
     const m = new Map<(typeof RECENCY_ORDER)[number], typeof channelInboxItems>();
     for (const cv of channelInboxItems) {
       const b = recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp);
@@ -1588,9 +1725,9 @@ function App() {
     }
     return RECENCY_ORDER.flatMap((b) => {
       const arr = m.get(b);
-      return arr && arr.length > 0 ? [{ bucket: b, items: arr }] : [];
+      return arr && arr.length > 0 ? [{ label: RECENCY_LABELS[b], items: arr }] : [];
     });
-  }, [channelInboxItems]);
+  }, [channelInboxItems, effectiveSortMode]);
 
   const [inboxBusy, setInboxBusy] = useState<Set<number>>(new Set());
 
@@ -1614,6 +1751,7 @@ function App() {
     () =>
       visibleInboxItems.filter(
         (cv) =>
+          !cv.is_short &&
           cv.seen_at == null &&
           recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp) !==
             "older"
@@ -1654,8 +1792,19 @@ function App() {
           .map((c) => (c.id === channelId ? { ...c, category } : c))
           .sort((a, b) => a.name.localeCompare(b.name))
       );
+      recordUndo(
+        category ? `Set category to “${category}”` : "Cleared category",
+        async () => {
+          await api.setChannelCategory(channelId, before);
+          setChannels((prev) =>
+            prev
+              .map((c) => (c.id === channelId ? { ...c, category: before } : c))
+              .sort((a, b) => a.name.localeCompare(b.name))
+          );
+        }
+      );
     },
-    [channels, pushToast]
+    [channels, pushToast, recordUndo]
   );
 
   // ---------------------------------------------------------------------------
@@ -1879,14 +2028,16 @@ function App() {
               <label className="flex items-center gap-1.5 text-[11.5px] text-ink-faint shrink-0">
                 <span className="hidden lg:inline">Sort</span>
                 <select
-                  value={sortMode}
+                  value={effectiveSortMode}
                   onChange={(e) => setSortMode(e.target.value as SortMode)}
                   className="text-[12px] px-2 py-1 rounded-md bg-canvas border border-line text-ink-dim focus:outline-none focus:border-accent"
-                  title="Sort order for the library list"
+                  title="Sort order for this list"
                 >
-                  <option value="added">Date added</option>
-                  <option value="uploaded">Upload date</option>
-                  <option value="length">Length</option>
+                  {sortOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {SORT_LABELS[m]}
+                    </option>
+                  ))}
                 </select>
               </label>
             )}
@@ -2001,7 +2152,8 @@ function App() {
                   (cv) =>
                     cv.channel_id === currentChannel.id &&
                     !cv.in_library &&
-                    !cv.dismissed
+                    !cv.dismissed &&
+                    (settings.showShorts || !cv.is_short)
                 );
                 const scope = `channel-${currentChannel.id}`;
                 const busy = bulkDismissingScope === scope;
@@ -2089,12 +2241,12 @@ function App() {
               ) : filter.kind === "channel" &&
                 (filtered.length > 0 || channelInboxItems.length > 0) ? (
                 <div>
-                  {channelInboxGrouped.map(({ bucket, items }) => (
-                    <section key={"inbox-" + bucket} className="mb-4">
+                  {channelInboxGrouped.map(({ label, items }) => (
+                    <section key={"inbox-" + label} className="mb-4">
                       <div className="sticky top-0 z-[5] bg-canvas/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-line/60">
                         <div className="flex items-baseline gap-3">
                           <h3 className="text-[13px] font-semibold tracking-tight">
-                            {RECENCY_LABELS[bucket]}
+                            {label}
                           </h3>
                           <span className="text-[11px] text-ink-faint tabular-nums">
                             {items.length}
@@ -2259,6 +2411,10 @@ function App() {
                       onOpen={handleOpenAndMarkWatched}
                       onRequestDelete={() => handleDeleteVideo(selectedVideo)}
                       onFollowChannel={handleFollowChannelFromVideo}
+                      followBusy={
+                        !!selectedVideo.channel_url &&
+                        followingUrls.has(selectedVideo.channel_url)
+                      }
                       offlinePercent={downloads.get(selectedVideo.id)}
                       defaultMaxHeight={settings.offlineMaxHeight}
                       onDownload={(v, h) => handleDownloadVideo(v.id, h)}

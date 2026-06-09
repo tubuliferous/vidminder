@@ -34,6 +34,8 @@ pub struct Video {
     pub offline_quality: Option<String>,
     pub offline_size: Option<i64>,
     pub offline_downloaded_at: Option<i64>,
+    /// True for YouTube Shorts.
+    pub is_short: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -69,6 +71,7 @@ pub struct ChannelVideo {
     pub seen_at: Option<i64>,
     pub dismissed: bool,
     pub in_library: bool,
+    pub is_short: bool,
 }
 
 pub fn open_db() -> Result<Db> {
@@ -160,6 +163,10 @@ pub fn open_db() -> Result<Db> {
     add_column_if_missing(&conn, "videos", "offline_downloaded_at", "INTEGER")?;
     add_column_if_missing(&conn, "channel_videos", "upload_timestamp", "INTEGER")?;
     add_column_if_missing(&conn, "channel_videos", "seen_at", "INTEGER")?;
+    // Whether an item is a YouTube Short. Fetched in the background regardless;
+    // a user preference governs whether they appear in the lists.
+    add_column_if_missing(&conn, "channel_videos", "is_short", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(&conn, "videos", "is_short", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(&conn, "channels", "category", "TEXT")?;
     add_column_if_missing(&conn, "channels", "description", "TEXT")?;
     add_column_if_missing(&conn, "channels", "subscriber_count", "INTEGER")?;
@@ -257,6 +264,7 @@ pub struct NewVideo<'a> {
     pub raw_tags: &'a [String],
     pub channel_url: Option<&'a str>,
     pub channel_id: Option<&'a str>,
+    pub is_short: bool,
 }
 
 pub fn insert_video(conn: &Connection, v: NewVideo<'_>) -> Result<i64> {
@@ -265,8 +273,9 @@ pub fn insert_video(conn: &Connection, v: NewVideo<'_>) -> Result<i64> {
     conn.execute(
         r#"INSERT INTO videos
             (url, source, video_id, title, description, thumbnail_url, uploader,
-             duration, upload_date, category, raw_tags, added_at, channel_url, channel_id)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
+             duration, upload_date, category, raw_tags, added_at, channel_url, channel_id,
+             is_short)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
         params![
             v.url,
             v.source,
@@ -282,6 +291,7 @@ pub fn insert_video(conn: &Connection, v: NewVideo<'_>) -> Result<i64> {
             now,
             v.channel_url,
             v.channel_id,
+            v.is_short as i64,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -292,8 +302,9 @@ pub fn insert_video_at(conn: &Connection, v: NewVideo<'_>, added_at: i64) -> Res
     conn.execute(
         r#"INSERT INTO videos
             (url, source, video_id, title, description, thumbnail_url, uploader,
-             duration, upload_date, category, raw_tags, added_at, channel_url, channel_id)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
+             duration, upload_date, category, raw_tags, added_at, channel_url, channel_id,
+             is_short)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
         params![
             v.url,
             v.source,
@@ -309,6 +320,7 @@ pub fn insert_video_at(conn: &Connection, v: NewVideo<'_>, added_at: i64) -> Res
             added_at,
             v.channel_url,
             v.channel_id,
+            v.is_short as i64,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -329,7 +341,7 @@ pub fn get_video(conn: &Connection, id: i64) -> Result<Option<Video>> {
         r#"SELECT id, url, source, video_id, title, description, thumbnail_url, uploader,
                   duration, upload_date, category, raw_tags, watched, favorite,
                   added_at, channel_url, channel_id, offline_status, offline_path,
-                  offline_quality, offline_size, offline_downloaded_at
+                  offline_quality, offline_size, offline_downloaded_at, is_short
            FROM videos WHERE id = ?1"#,
     )?;
     let row = stmt
@@ -350,7 +362,7 @@ pub fn list_videos(conn: &Connection) -> Result<Vec<Video>> {
         r#"SELECT id, url, source, video_id, title, description, thumbnail_url, uploader,
                   duration, upload_date, category, raw_tags, watched, favorite,
                   added_at, channel_url, channel_id, offline_status, offline_path,
-                  offline_quality, offline_size, offline_downloaded_at
+                  offline_quality, offline_size, offline_downloaded_at, is_short
            FROM videos
            ORDER BY added_at DESC"#,
     )?;
@@ -395,6 +407,7 @@ fn row_to_video(r: &rusqlite::Row<'_>) -> rusqlite::Result<Video> {
         offline_quality: r.get("offline_quality").ok().flatten(),
         offline_size: r.get("offline_size").ok().flatten(),
         offline_downloaded_at: r.get("offline_downloaded_at").ok().flatten(),
+        is_short: r.get::<_, i64>("is_short").unwrap_or(0) != 0,
     })
 }
 
@@ -892,7 +905,8 @@ pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<Channel>> {
                          AND cv.seen_at IS NULL
                          AND cv.upload_timestamp IS NOT NULL
                          AND cv.upload_timestamp >= (strftime('%s', 'now') - 14 * 86400)
-                         AND cv.url NOT IN (SELECT url FROM videos)) AS inbox_count
+                         AND cv.url NOT IN (SELECT url FROM videos)
+                         AND cv.is_short = 0) AS inbox_count
                FROM channels c
                WHERE c.id = ?1"#,
             params![id],
@@ -985,6 +999,7 @@ pub struct NewChannelVideo<'a> {
     pub upload_date: Option<&'a str>,
     pub upload_timestamp: Option<i64>,
     pub dismissed: bool,
+    pub is_short: bool,
 }
 
 pub struct UpsertResult {
@@ -1007,8 +1022,8 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
         r#"INSERT OR IGNORE INTO channel_videos
             (channel_id, video_external_id, url, title, thumbnail_url,
              duration, upload_date, upload_timestamp, first_seen_at,
-             dismissed, auto_dismissed_at_follow, timestamp_verified)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)"#,
+             dismissed, auto_dismissed_at_follow, is_short, timestamp_verified)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0)"#,
         params![
             v.channel_id,
             v.video_external_id,
@@ -1021,6 +1036,7 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
             now,
             v.dismissed as i64,
             auto_dismissed_flag,
+            v.is_short as i64,
         ],
     )?;
     if inserted > 0 {
@@ -1056,6 +1072,16 @@ pub fn upsert_channel_video(conn: &Connection, v: NewChannelVideo<'_>) -> Result
              AND title IS NOT ?1"#,
         params![v.title, v.channel_id, v.video_external_id],
     )?;
+    // Promote to Short if we now know it is one (e.g. first seen via /videos,
+    // later confirmed via the /shorts tab). Never demote.
+    if v.is_short {
+        conn.execute(
+            r#"UPDATE channel_videos
+               SET is_short = 1
+               WHERE channel_id = ?1 AND video_external_id = ?2 AND is_short = 0"#,
+            params![v.channel_id, v.video_external_id],
+        )?;
+    }
     if v.thumbnail_url.is_some() {
         conn.execute(
             r#"UPDATE channel_videos
@@ -1163,7 +1189,7 @@ pub fn list_inbox(conn: &Connection) -> Result<Vec<ChannelVideo>> {
         r#"SELECT cv.id, cv.channel_id, c.name AS channel_name, c.url AS channel_url,
                   cv.video_external_id, cv.url, cv.title, cv.thumbnail_url,
                   cv.duration, cv.upload_date, cv.upload_timestamp,
-                  cv.first_seen_at, cv.seen_at, cv.dismissed,
+                  cv.first_seen_at, cv.seen_at, cv.dismissed, cv.is_short,
                   (cv.url IN (SELECT url FROM videos)) AS in_library
            FROM channel_videos cv
            JOIN channels c ON c.id = cv.channel_id
@@ -1208,6 +1234,7 @@ fn channel_video_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelVide
         seen_at: r.get("seen_at").ok().flatten(),
         dismissed: dismissed_i != 0,
         in_library: in_library_i != 0,
+        is_short: r.get::<_, i64>("is_short").unwrap_or(0) != 0,
     })
 }
 
@@ -1217,7 +1244,7 @@ pub fn get_channel_video(conn: &Connection, id: i64) -> Result<Option<ChannelVid
             r#"SELECT cv.id, cv.channel_id, c.name AS channel_name, c.url AS channel_url,
                       cv.video_external_id, cv.url, cv.title, cv.thumbnail_url,
                       cv.duration, cv.upload_date, cv.upload_timestamp,
-                      cv.first_seen_at, cv.dismissed,
+                      cv.first_seen_at, cv.dismissed, cv.is_short,
                       (cv.url IN (SELECT url FROM videos)) AS in_library
                FROM channel_videos cv
                JOIN channels c ON c.id = cv.channel_id

@@ -24,6 +24,7 @@ export type Video = {
   offline_quality: string | null;
   offline_size: number | null;
   offline_downloaded_at: number | null;
+  is_short: boolean;
 };
 
 export type Channel = {
@@ -57,6 +58,7 @@ export type ChannelVideo = {
   seen_at: number | null;
   dismissed: boolean;
   in_library: boolean;
+  is_short: boolean;
 };
 
 export type CatchUpSummary = {

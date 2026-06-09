@@ -6,6 +6,7 @@
       "Read(./src-tauri/target/**)",
       "Read(./src-tauri/gen/**)",
       "Read(./src-tauri/binaries/**)",
+      "Read(./src-tauri/runtime/**)",
       "Read(./src-tauri/icons/**)",
       "Read(./src-tauri/icons-dev/**)",
       "Read(./src-tauri/Cargo.lock)",

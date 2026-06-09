@@ -15,6 +15,10 @@ export type Settings = {
   /// downloads. 720 is the default; 0 means audio-only; 99999 means "best
   /// available". The per-video pickers can override this per download.
   offlineMaxHeight: number;
+  /// Whether YouTube Shorts appear in the inbox and library lists. Shorts are
+  /// always fetched in the background; this only governs their visibility.
+  /// Off by default.
+  showShorts: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -23,6 +27,7 @@ const DEFAULTS: Settings = {
   pollIntervalMinutes: 30,
   channelLookbackDays: 14,
   offlineMaxHeight: 720,
+  showShorts: false,
 };
 
 export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [

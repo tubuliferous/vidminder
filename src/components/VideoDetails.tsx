@@ -20,6 +20,7 @@ type Props = {
   onOpen: (video: Video) => void;
   onRequestDelete: () => void;
   onFollowChannel: (video: Video) => void;
+  followBusy?: boolean;
   /// Live download percent (0–100) while this video is downloading.
   offlinePercent?: number;
   /// The user's default download quality (settings.offlineMaxHeight) — seeds
@@ -41,6 +42,7 @@ export function VideoDetails({
   onOpen,
   onRequestDelete,
   onFollowChannel,
+  followBusy = false,
   offlinePercent,
   defaultMaxHeight,
   onDownload,
@@ -130,9 +132,15 @@ export function VideoDetails({
               ) : (
                 <button
                   onClick={() => onFollowChannel(video)}
-                  className="text-[12px] px-2.5 py-1 rounded-md border border-accent/40 text-accent hover:bg-accent-dim/40 transition"
+                  disabled={followBusy}
+                  className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-accent/40 text-accent hover:bg-accent-dim/40 disabled:opacity-70 disabled:hover:bg-transparent transition"
                 >
-                  + Follow {video.uploader ?? "this channel"}
+                  {followBusy && (
+                    <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin shrink-0" />
+                  )}
+                  {followBusy
+                    ? `Following ${video.uploader ?? "channel"}…`
+                    : `+ Follow ${video.uploader ?? "this channel"}`}
                 </button>
               )}
             </div>

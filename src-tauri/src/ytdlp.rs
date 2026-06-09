@@ -1,19 +1,111 @@
 use anyhow::{anyhow, Context, Result};
+use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-/// Locate yt-dlp. In production we ship it as a Tauri sidecar so the binary
-/// lives next to the main executable (Tauri strips the target-triple suffix
-/// from `externalBin` files when bundling). In dev we fall back to whatever
-/// yt-dlp is on the user's PATH.
+/// The bundle's resource directory, set once at startup from `lib.rs`. The
+/// embedded Python runtime is shipped under `<resource_dir>/runtime/`.
+static RESOURCE_DIR: OnceCell<PathBuf> = OnceCell::new();
+
+/// Record where bundled resources live. Called once during Tauri setup with
+/// `app.path().resource_dir()`. Idempotent; later calls are ignored.
+pub fn set_resource_dir(dir: PathBuf) {
+    let _ = RESOURCE_DIR.set(dir);
+}
+
+/// Locate the embedded Python runtime directory (containing `python/` and
+/// `pylib/`). In production it's under the bundle resources; in dev it's
+/// `src-tauri/runtime/`, populated by `npm run install-sidecar`.
+fn runtime_dir() -> Option<PathBuf> {
+    if let Some(res) = RESOURCE_DIR.get() {
+        let rt = res.join("runtime");
+        if rt.join("pylib").is_dir() {
+            return Some(rt);
+        }
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime");
+    if dev.join("pylib").is_dir() {
+        return Some(dev);
+    }
+    None
+}
+
+/// Path to the relocatable interpreter inside a runtime dir. We strip pbs's
+/// convenience symlinks when staging, so we resolve the real versioned binary
+/// (any `bin/python3.NN`), falling back to plain names.
+fn python_exe(runtime: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        let c = runtime.join("python").join("python.exe");
+        return c.is_file().then_some(c);
+    }
+    let bin = runtime.join("python").join("bin");
+    if let Ok(rd) = std::fs::read_dir(&bin) {
+        let mut hit = None;
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("python3.") && !name.ends_with("-config") {
+                hit = Some(e.path());
+                break;
+            }
+        }
+        if let Some(path) = hit {
+            ensure_executable(&path);
+            return Some(path);
+        }
+    }
+    for name in ["python3", "python"] {
+        let c = bin.join(name);
+        if c.is_file() {
+            ensure_executable(&c);
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Tauri's resource copier doesn't always preserve the executable bit, so make
+/// sure the interpreter is runnable. Best-effort; ignore failures.
+#[cfg(not(target_os = "windows"))]
+fn ensure_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = meta.permissions().mode();
+        if mode & 0o111 == 0 {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o755));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_executable(_path: &Path) {}
+
+/// Build a command that runs yt-dlp. In production we run the bundled
+/// relocatable CPython as `python -m yt_dlp` (fast cold start, ~0.3s). In dev,
+/// or if the runtime is somehow missing, we fall back to a `yt-dlp` on PATH.
 fn yt_dlp_command() -> Command {
-    let mut cmd = if let Some(path) = sidecar_path() {
-        Command::new(path)
-    } else {
-        Command::new("yt-dlp")
+    let mut cmd = match runtime_dir().and_then(|rt| python_exe(&rt).map(|py| (rt, py))) {
+        Some((rt, py)) => {
+            let pylib = rt.join("pylib");
+            let mut c = Command::new(py);
+            c.arg("-m").arg("yt_dlp");
+            c.env("PYTHONPATH", &pylib);
+            // Don't let a user's site-packages or PYTHON* env leak in, and don't
+            // litter the (possibly read-only) bundle with .pyc files.
+            c.env("PYTHONNOUSERSITE", "1");
+            c.env("PYTHONDONTWRITEBYTECODE", "1");
+            // The relocatable interpreter has no system trust store; point it at
+            // the bundled certifi CA bundle so HTTPS verification works.
+            let cert = pylib.join("certifi").join("cacert.pem");
+            if cert.is_file() {
+                c.env("SSL_CERT_FILE", &cert);
+            }
+            c
+        }
+        None => Command::new("yt-dlp"),
     };
     augment_path(&mut cmd);
     suppress_console_on_windows(&mut cmd);
@@ -61,22 +153,6 @@ fn suppress_console_on_windows(cmd: &mut Command) {
 
 #[cfg(not(target_os = "windows"))]
 fn suppress_console_on_windows(_cmd: &mut Command) {}
-
-fn sidecar_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let name = if cfg!(target_os = "windows") {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    };
-    let candidate = dir.join(name);
-    if candidate.is_file() {
-        Some(candidate)
-    } else {
-        None
-    }
-}
 
 /// The directory the bundled binaries live in (next to the main executable).
 /// In dev there is no sidecar dir, so this is None and we fall back to PATH.
@@ -315,6 +391,9 @@ pub struct ChannelEntry {
     pub timestamp: Option<i64>,
     pub thumbnails: Option<Vec<Thumbnail>>,
     pub thumbnail: Option<String>,
+    /// Set by us (not yt-dlp) when an entry came from the channel's /shorts tab.
+    #[serde(default)]
+    pub is_short: bool,
 }
 
 impl ChannelListing {
@@ -460,17 +539,38 @@ pub async fn fetch_info(url: &str) -> Result<YtdlpInfo> {
 }
 
 pub async fn fetch_channel_listing(url: &str, max_entries: usize) -> Result<ChannelListing> {
-    // Use yt-dlp's /videos tab and trust its natural reverse-chronological
-    // ordering. An earlier multi-tab merge (videos + streams + shorts) re-
-    // sorted by yt-dlp's approximate_date timestamps; those are unreliable
-    // enough that legitimate /videos entries got out-ordered and dropped
-    // from the truncated result — coverage regressed since v0.1.0 because
-    // of that re-sort, not because of missing tabs. Keep it simple.
-    fetch_single_tab(url, max_entries).await
+    // Primary: the /videos tab, trusting its natural reverse-chronological
+    // ordering. (An earlier multi-tab merge re-sorted by yt-dlp's approximate
+    // dates, which are unreliable enough that legitimate /videos entries got
+    // out-ordered and dropped — so we keep /videos as the authoritative list.)
+    let mut listing = fetch_single_tab(url, max_entries, "videos").await?;
+
+    // Also pull the /shorts tab in the background and flag those entries, so a
+    // user preference can show or hide Shorts without a refetch. Non-fatal: a
+    // channel may have no Shorts, or the tab may error — we just skip them then.
+    if let Ok(shorts) = fetch_single_tab(url, max_entries, "shorts").await {
+        let have: std::collections::HashSet<String> = listing
+            .entries
+            .iter()
+            .filter_map(|e| e.id.clone())
+            .collect();
+        for mut e in shorts.entries {
+            e.is_short = true;
+            let dup = e.id.as_ref().map(|id| have.contains(id)).unwrap_or(false);
+            if !dup {
+                listing.entries.push(e);
+            }
+        }
+    }
+    Ok(listing)
 }
 
-async fn fetch_single_tab(url: &str, max_entries: usize) -> Result<ChannelListing> {
-    let url = normalize_channel_url(url);
+async fn fetch_single_tab(
+    url: &str,
+    max_entries: usize,
+    tab: &str,
+) -> Result<ChannelListing> {
+    let url = channel_tab_url(url, tab);
     let output = yt_dlp_command()
         .args([
             "--dump-single-json",
@@ -504,9 +604,10 @@ async fn fetch_single_tab(url: &str, max_entries: usize) -> Result<ChannelListin
 }
 
 
-/// For YouTube channel URLs, append `/videos` to restrict to the videos tab.
-/// Otherwise leave the URL alone.
-fn normalize_channel_url(url: &str) -> String {
+/// For a YouTube channel URL, force it onto the given tab (e.g. "videos" or
+/// "shorts"), replacing any existing tab segment. Non-channel URLs are left
+/// alone.
+fn channel_tab_url(url: &str, tab: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else {
         return url.to_string();
     };
@@ -522,18 +623,24 @@ fn normalize_channel_url(url: &str) -> String {
     if !is_channel_path {
         return url.to_string();
     }
-    // Already ends in /videos, /streams, /shorts, etc.
-    let last_seg = path.rsplit('/').next().unwrap_or("");
-    let has_tab = matches!(
-        last_seg,
-        "videos" | "streams" | "shorts" | "playlists" | "community" | "featured" | "about"
-    );
-    if has_tab {
-        return url.to_string();
+    // Drop any trailing tab segment so we can append the one we want.
+    let known = [
+        "videos",
+        "streams",
+        "shorts",
+        "playlists",
+        "community",
+        "featured",
+        "about",
+    ];
+    let mut segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.last().map(|s| known.contains(s)).unwrap_or(false) {
+        segs.pop();
     }
     let scheme = parsed.scheme();
     let host = parsed.host_str().unwrap_or("youtube.com");
-    format!("{scheme}://{host}{path}/videos")
+    let base = segs.join("/");
+    format!("{scheme}://{host}/{base}/{tab}")
 }
 
 /// Heuristic — does this URL look like a channel/uploader page rather than a single video?

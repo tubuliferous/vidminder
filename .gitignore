@@ -16,6 +16,10 @@ dist-ssr
 # locally, or by the CI workflow before each build.
 src-tauri/binaries/
 
+# Embedded Python runtime (relocatable CPython + yt-dlp), bundled as a Tauri
+# resource. Populated per platform by scripts/install-sidecar.mjs / CI.
+src-tauri/runtime/
+
 # Local dev icon overrides. Populated by `npx tauri icon <your.png> --output
 # src-tauri/icons-dev`. Not part of the production build — used only by
 # `npm run tauri:dev` via tauri.conf.dev.json.

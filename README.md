@@ -18,7 +18,13 @@ All links point to the **latest release** automatically — bookmark them and th
 
 > **Windows users**: The installer is unsigned, so SmartScreen will show a warning. Click *More info → Run anyway*.
 
-> **macOS users**: Unzip, drag `VidMinder.app` to Applications, then right-click it and choose *Open* the first time (Gatekeeper blocks unsigned apps on double-click). Or run `xattr -dr com.apple.quarantine /Applications/VidMinder.app` once.
+> **macOS users**: Unzip and drag `VidMinder.app` to Applications. Because the app is unsigned, Gatekeeper will block it — on recent macOS you may even see *"VidMinder is damaged and can't be opened."* That's the quarantine flag, not a real problem. Clear it once with:
+>
+> ```sh
+> xattr -dr com.apple.quarantine /Applications/VidMinder.app
+> ```
+>
+> Then open the app normally. (On older macOS you can instead right-click the app and choose *Open* the first time.)
 
 > Every release ships a self-contained build — yt-dlp is bundled, no separate install needed.
 
@@ -29,22 +35,25 @@ All links point to the **latest release** automatically — bookmark them and th
 - **Tags, folders, favorites** for organizing. Drag videos onto sidebar slots to bulk-organize.
 - **Search** across title, description, uploader, tags. Plus a dedicated inbox search.
 - **Universal undo** — `⌘Z`/`Ctrl+Z` undoes the last add, delete, tag change, dismiss, follow, anything.
-- **Keyboard shortcuts** — `Delete` removes the highlighted video, `⌘T` focuses the tag input, `⌘,` opens settings.
+- **Keyboard shortcuts** — `Delete` removes the highlighted video, `⌘Delete`/`Ctrl+Delete` deletes the selected tag folder, `⌘T` focuses the tag input, `⌘,` opens settings.
 
 ## Development
 
 ```bash
-# One-time: install Rust, Node, and yt-dlp (Mac/Linux)
-brew install yt-dlp                    # or pipx install yt-dlp
+# One-time: install Rust and Node (Mac/Linux)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Clone, install deps, set up the yt-dlp sidecar, and run
+# Clone, install deps, set up the bundled runtime, and run
 git clone https://github.com/tubuliferous/vidminder.git
 cd vidminder
 npm install
-npm run install-sidecar          # symlinks system yt-dlp into src-tauri/binaries
+npm run install-sidecar          # downloads a relocatable CPython + yt-dlp and a static ffmpeg into src-tauri/
 npm run tauri dev
 ```
+
+> No system `yt-dlp`/`ffmpeg` needed — `install-sidecar` fetches a self-contained
+> Python runtime (with yt-dlp) and a static ffmpeg, the same pieces the shipped
+> app bundles.
 
 The SQLite database lives at:
 - macOS: `~/Library/Application Support/VidMinder/vidminder.sqlite`
