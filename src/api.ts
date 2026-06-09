@@ -89,16 +89,48 @@ export async function listVideos(): Promise<Video[]> {
   return await invoke<Video[]>("list_videos");
 }
 
+// === Offline downloads =====================================================
+
+/// The video heights yt-dlp reports as available for this video, largest first.
+export async function listVideoFormats(videoId: number): Promise<number[]> {
+  return await invoke<number[]>("list_video_formats", { videoId });
+}
+
+/// Start (or no-op if already running) a download. `maxHeight` caps resolution;
+/// 0 = audio-only, 99999 = best available.
+export async function downloadVideo(videoId: number, maxHeight: number): Promise<void> {
+  await invoke("download_video", { videoId, maxHeight });
+}
+
+/// Batch download — each video is capped at `maxHeight` (or below if it has no
+/// stream that tall).
+export async function downloadVideos(videoIds: number[], maxHeight: number): Promise<void> {
+  await invoke("download_videos", { videoIds, maxHeight });
+}
+
+export async function cancelDownload(videoId: number): Promise<void> {
+  await invoke("cancel_download", { videoId });
+}
+
+export async function deleteOffline(videoId: number): Promise<void> {
+  await invoke("delete_offline", { videoId });
+}
+
+/// Open a downloaded video in the system's default media player. Returns false
+/// if the file is gone (deleted outside the app) — in which case the backend
+/// has reset the video's offline status and the caller should open it online.
+/// Goes through a small Rust command (native `open`/`xdg-open`/`start`) rather
+/// than the opener plugin, which is gated by webview capabilities.
+export async function openOffline(videoId: number): Promise<boolean> {
+  return await invoke<boolean>("open_offline", { videoId });
+}
+
 export async function deleteVideo(id: number): Promise<void> {
   await invoke("delete_video", { id });
 }
 
 export async function restoreVideo(video: Video): Promise<Video> {
   return await invoke<Video>("restore_video", { video });
-}
-
-export async function setFolder(id: number, folder: string | null): Promise<void> {
-  await invoke("set_folder", { id, folder });
 }
 
 export async function setWatched(id: number, watched: boolean): Promise<void> {

@@ -20,13 +20,20 @@ pub struct Video {
     pub upload_date: Option<String>,
     pub category: Option<String>,
     pub raw_tags: Vec<String>,
-    pub folder: Option<String>,
     pub user_tags: Vec<String>,
     pub watched: bool,
     pub favorite: bool,
     pub added_at: i64,
     pub channel_url: Option<String>,
     pub channel_id: Option<String>,
+    /// Offline-download state. `offline_status` is one of "none",
+    /// "downloading", "ready", or "error". The remaining fields are populated
+    /// only when a download has succeeded (status "ready").
+    pub offline_status: String,
+    pub offline_path: Option<String>,
+    pub offline_quality: Option<String>,
+    pub offline_size: Option<i64>,
+    pub offline_downloaded_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -38,6 +45,8 @@ pub struct Channel {
     pub name: String,
     pub thumbnail_url: Option<String>,
     pub category: Option<String>,
+    pub description: Option<String>,
+    pub subscriber_count: Option<i64>,
     pub followed_at: i64,
     pub last_checked_at: Option<i64>,
     pub inbox_count: i64,
@@ -142,9 +151,18 @@ pub fn open_db() -> Result<Db> {
     add_column_if_missing(&conn, "videos", "channel_url", "TEXT")?;
     add_column_if_missing(&conn, "videos", "channel_id", "TEXT")?;
     add_column_if_missing(&conn, "videos", "favorite", "INTEGER NOT NULL DEFAULT 0")?;
+    // Offline-download state. `offline_status` defaults to 'none'; the rest stay
+    // NULL until a download succeeds.
+    add_column_if_missing(&conn, "videos", "offline_status", "TEXT NOT NULL DEFAULT 'none'")?;
+    add_column_if_missing(&conn, "videos", "offline_path", "TEXT")?;
+    add_column_if_missing(&conn, "videos", "offline_quality", "TEXT")?;
+    add_column_if_missing(&conn, "videos", "offline_size", "INTEGER")?;
+    add_column_if_missing(&conn, "videos", "offline_downloaded_at", "INTEGER")?;
     add_column_if_missing(&conn, "channel_videos", "upload_timestamp", "INTEGER")?;
     add_column_if_missing(&conn, "channel_videos", "seen_at", "INTEGER")?;
     add_column_if_missing(&conn, "channels", "category", "TEXT")?;
+    add_column_if_missing(&conn, "channels", "description", "TEXT")?;
+    add_column_if_missing(&conn, "channels", "subscriber_count", "INTEGER")?;
     // One-time wipe: every existing upload_timestamp predates the
     // "RSS-as-sole-truth" rule and was sourced from yt-dlp's approximate_date
     // heuristic, which is wildly wrong for older videos. Force RSS to repopulate.
@@ -309,8 +327,9 @@ pub fn find_video_by_url(conn: &Connection, url: &str) -> Result<Option<i64>> {
 pub fn get_video(conn: &Connection, id: i64) -> Result<Option<Video>> {
     let mut stmt = conn.prepare(
         r#"SELECT id, url, source, video_id, title, description, thumbnail_url, uploader,
-                  duration, upload_date, category, raw_tags, folder, watched, favorite,
-                  added_at, channel_url, channel_id
+                  duration, upload_date, category, raw_tags, watched, favorite,
+                  added_at, channel_url, channel_id, offline_status, offline_path,
+                  offline_quality, offline_size, offline_downloaded_at
            FROM videos WHERE id = ?1"#,
     )?;
     let row = stmt
@@ -329,8 +348,9 @@ pub fn get_video(conn: &Connection, id: i64) -> Result<Option<Video>> {
 pub fn list_videos(conn: &Connection) -> Result<Vec<Video>> {
     let mut stmt = conn.prepare(
         r#"SELECT id, url, source, video_id, title, description, thumbnail_url, uploader,
-                  duration, upload_date, category, raw_tags, folder, watched, favorite,
-                  added_at, channel_url, channel_id
+                  duration, upload_date, category, raw_tags, watched, favorite,
+                  added_at, channel_url, channel_id, offline_status, offline_path,
+                  offline_quality, offline_size, offline_downloaded_at
            FROM videos
            ORDER BY added_at DESC"#,
     )?;
@@ -362,26 +382,84 @@ fn row_to_video(r: &rusqlite::Row<'_>) -> rusqlite::Result<Video> {
         upload_date: r.get("upload_date")?,
         category: r.get("category")?,
         raw_tags,
-        folder: r.get("folder")?,
         user_tags: Vec::new(),
         watched: watched_int != 0,
         favorite: favorite_int != 0,
         added_at: r.get("added_at")?,
         channel_url: r.get("channel_url").ok(),
         channel_id: r.get("channel_id").ok(),
+        offline_status: r
+            .get::<_, String>("offline_status")
+            .unwrap_or_else(|_| "none".to_string()),
+        offline_path: r.get("offline_path").ok().flatten(),
+        offline_quality: r.get("offline_quality").ok().flatten(),
+        offline_size: r.get("offline_size").ok().flatten(),
+        offline_downloaded_at: r.get("offline_downloaded_at").ok().flatten(),
     })
+}
+
+/// Mark a video's download state. Used to flip to "downloading"/"error".
+pub fn set_offline_status(conn: &Connection, id: i64, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE videos SET offline_status = ?1 WHERE id = ?2",
+        params![status, id],
+    )?;
+    Ok(())
+}
+
+/// Record a completed download: path, quality label, byte size, timestamp.
+pub fn set_offline_ready(
+    conn: &Connection,
+    id: i64,
+    path: &str,
+    quality: &str,
+    size: i64,
+) -> Result<()> {
+    conn.execute(
+        r#"UPDATE videos
+           SET offline_status = 'ready', offline_path = ?1, offline_quality = ?2,
+               offline_size = ?3, offline_downloaded_at = ?4
+           WHERE id = ?5"#,
+        params![path, quality, size, unix_now(), id],
+    )?;
+    Ok(())
+}
+
+/// Clear offline state back to "none" and return the previous file path (if any)
+/// so the caller can unlink it from disk.
+pub fn clear_offline(conn: &Connection, id: i64) -> Result<Option<String>> {
+    let prev: Option<String> = conn
+        .query_row(
+            "SELECT offline_path FROM videos WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    conn.execute(
+        r#"UPDATE videos
+           SET offline_status = 'none', offline_path = NULL, offline_quality = NULL,
+               offline_size = NULL, offline_downloaded_at = NULL
+           WHERE id = ?1"#,
+        params![id],
+    )?;
+    Ok(prev)
+}
+
+/// The current offline file path for a video, if downloaded.
+pub fn get_offline_path(conn: &Connection, id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT offline_path FROM videos WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 pub fn delete_video(conn: &Connection, id: i64) -> Result<()> {
     conn.execute("DELETE FROM videos WHERE id = ?1", params![id])?;
-    Ok(())
-}
-
-pub fn set_folder(conn: &Connection, id: i64, folder: Option<&str>) -> Result<()> {
-    conn.execute(
-        "UPDATE videos SET folder = ?1 WHERE id = ?2",
-        params![folder, id],
-    )?;
     Ok(())
 }
 
@@ -591,13 +669,21 @@ pub fn add_tag_to_videos(conn: &Connection, video_ids: &[i64], tag: &str) -> Res
     Ok(())
 }
 
-/// Rename `old` and every descendant tag (`old.…`) to sit under `new`.
-/// Example: rename "science.bio" -> "science.biology" also rewrites
-/// "science.bio.x" to "science.biology.x".
+/// Rename `old` and every descendant tag (`old.…`) to sit under `new`, across
+/// every video that carries them. Examples:
+///   "science.bio" -> "science.biology"  also rewrites "science.bio.x".
+///   "science"     -> "Science"          changes the capitalization everywhere.
+///
+/// Rename is authoritative about casing — it does NOT canonicalize against
+/// existing tags (which would snap a case change back to the old spelling).
+/// Each affected tag is renamed IN PLACE; if the new path collides with a
+/// different existing tag, the two are merged instead.
 pub fn rename_tag_in_db(conn: &Connection, old: &str, new: &str) -> Result<()> {
     let old = normalize_tag(old);
     let new = normalize_tag(new);
-    if old.is_empty() || new.is_empty() || old.eq_ignore_ascii_case(&new) {
+    // Exact (case-sensitive) equality is the only true no-op; a case-only
+    // change like "science" -> "Science" must go through.
+    if old.is_empty() || new.is_empty() || old == new {
         return Ok(());
     }
     let pattern = format!("{}.", old);
@@ -612,7 +698,6 @@ pub fn rename_tag_in_db(conn: &Connection, old: &str, new: &str) -> Result<()> {
         })?
         .filter_map(|r| r.ok())
         .collect();
-    let mut canon = tag_canon_map(conn)?;
     for (old_id, old_name) in affected {
         // Sliced at the matched-prefix length (case-insensitive match — so we
         // use old_name's own prefix length, which equals old.len()).
@@ -622,21 +707,35 @@ pub fn rename_tag_in_db(conn: &Connection, old: &str, new: &str) -> Result<()> {
             ""
         };
         let new_name = normalize_tag(&format!("{}{}", new, suffix));
-        let new_canon = canon_apply(&mut canon, &new_name);
-        let new_id = get_or_create_tag(conn, &new_canon)?;
-        if new_id == old_id {
-            continue;
+        // Is there a DIFFERENT existing tag already at the target path?
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE",
+                params![&new_name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(other_id) if other_id != old_id => {
+                // Merge into the existing tag, then drop the old one.
+                conn.execute(
+                    "INSERT OR IGNORE INTO video_tags(video_id, tag_id)
+                     SELECT video_id, ?1 FROM video_tags WHERE tag_id = ?2",
+                    params![other_id, old_id],
+                )?;
+                conn.execute("DELETE FROM video_tags WHERE tag_id = ?1", params![old_id])?;
+                conn.execute("DELETE FROM tags WHERE id = ?1", params![old_id])?;
+            }
+            _ => {
+                // Rename in place. Covers a case-only change (the row matches
+                // itself NOCASE) and a move to a brand-new path; the NOCASE
+                // UNIQUE index is satisfied since we update that same row.
+                conn.execute(
+                    "UPDATE tags SET name = ?1 WHERE id = ?2",
+                    params![&new_name, old_id],
+                )?;
+            }
         }
-        conn.execute(
-            "INSERT OR IGNORE INTO video_tags(video_id, tag_id)
-             SELECT video_id, ?1 FROM video_tags WHERE tag_id = ?2",
-            params![new_id, old_id],
-        )?;
-        conn.execute(
-            "DELETE FROM video_tags WHERE tag_id = ?1",
-            params![old_id],
-        )?;
-        conn.execute("DELETE FROM tags WHERE id = ?1", params![old_id])?;
     }
     Ok(())
 }
@@ -705,16 +804,6 @@ pub fn list_all_tags(conn: &Connection) -> Result<Vec<String>> {
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-pub fn list_folders(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT folder FROM videos
-         WHERE folder IS NOT NULL AND folder != ''
-         ORDER BY folder COLLATE NOCASE",
-    )?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
 pub fn list_categories(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT category FROM videos
@@ -733,6 +822,8 @@ pub struct NewChannel<'a> {
     pub channel_id: Option<&'a str>,
     pub name: &'a str,
     pub thumbnail_url: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub subscriber_count: Option<i64>,
 }
 
 pub fn find_channel_by_url(conn: &Connection, url: &str) -> Result<Option<i64>> {
@@ -748,9 +839,19 @@ pub fn find_channel_by_url(conn: &Connection, url: &str) -> Result<Option<i64>> 
 pub fn insert_channel(conn: &Connection, c: NewChannel<'_>) -> Result<i64> {
     let now = unix_now();
     conn.execute(
-        r#"INSERT INTO channels (url, source, channel_id, name, thumbnail_url, followed_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
-        params![c.url, c.source, c.channel_id, c.name, c.thumbnail_url, now],
+        r#"INSERT INTO channels
+            (url, source, channel_id, name, thumbnail_url, description, subscriber_count, followed_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+        params![
+            c.url,
+            c.source,
+            c.channel_id,
+            c.name,
+            c.thumbnail_url,
+            c.description,
+            c.subscriber_count,
+            now
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -760,11 +861,31 @@ pub fn delete_channel(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Refresh a channel's display metadata. NULL inputs keep the existing value
+/// (so a refresh that doesn't return a field doesn't wipe it).
+pub fn update_channel_meta(
+    conn: &Connection,
+    id: i64,
+    thumbnail_url: Option<&str>,
+    description: Option<&str>,
+    subscriber_count: Option<i64>,
+) -> Result<()> {
+    conn.execute(
+        r#"UPDATE channels
+           SET thumbnail_url = COALESCE(?1, thumbnail_url),
+               description = COALESCE(?2, description),
+               subscriber_count = COALESCE(?3, subscriber_count)
+           WHERE id = ?4"#,
+        params![thumbnail_url, description, subscriber_count, id],
+    )?;
+    Ok(())
+}
+
 pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<Channel>> {
     let row = conn
         .query_row(
             r#"SELECT c.id, c.url, c.source, c.channel_id, c.name, c.thumbnail_url,
-                      c.category, c.followed_at, c.last_checked_at,
+                      c.category, c.description, c.subscriber_count, c.followed_at, c.last_checked_at,
                       (SELECT COUNT(*) FROM channel_videos cv
                        WHERE cv.channel_id = c.id
                          AND cv.dismissed = 0
@@ -794,7 +915,7 @@ pub fn list_channels(conn: &Connection) -> Result<Vec<Channel>> {
     //     the badge — older items still appear in the inbox but don't count)
     let mut stmt = conn.prepare(
         r#"SELECT c.id, c.url, c.source, c.channel_id, c.name, c.thumbnail_url,
-                  c.category, c.followed_at, c.last_checked_at,
+                  c.category, c.description, c.subscriber_count, c.followed_at, c.last_checked_at,
                   (SELECT COUNT(*) FROM channel_videos cv
                    WHERE cv.channel_id = c.id
                      AND cv.dismissed = 0
@@ -822,6 +943,8 @@ fn channel_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Channel> {
         name: r.get("name")?,
         thumbnail_url: r.get("thumbnail_url")?,
         category: r.get("category").ok().flatten(),
+        description: r.get("description").ok().flatten(),
+        subscriber_count: r.get("subscriber_count").ok().flatten(),
         followed_at: r.get("followed_at")?,
         last_checked_at: r.get("last_checked_at").ok(),
         inbox_count: r.get("inbox_count").unwrap_or(0),
@@ -850,6 +973,7 @@ pub fn set_last_checked(conn: &Connection, channel_id: i64, when: i64) -> Result
     )?;
     Ok(())
 }
+
 
 pub struct NewChannelVideo<'a> {
     pub channel_id: i64,
@@ -1195,4 +1319,87 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+             CREATE TABLE video_tags (video_id INTEGER NOT NULL, tag_id INTEGER NOT NULL,
+                 PRIMARY KEY (video_id, tag_id));",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn tags_for(conn: &Connection, vid: i64) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.name FROM video_tags vt JOIN tags t ON t.id = vt.tag_id
+                 WHERE vt.video_id = ?1 ORDER BY t.name",
+            )
+            .unwrap();
+        stmt.query_map([vid], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    #[test]
+    fn rename_repaths_tag_and_descendants_on_all_videos() {
+        let conn = setup();
+        // video 1: "science" + "science.biology"; video 2: "science.biology.cell"
+        add_tag(&conn, 1, "science").unwrap();
+        add_tag(&conn, 1, "science.biology").unwrap();
+        add_tag(&conn, 2, "science.biology.cell").unwrap();
+
+        rename_tag_in_db(&conn, "science", "physics").unwrap();
+
+        assert_eq!(tags_for(&conn, 1), vec!["physics", "physics.biology"]);
+        assert_eq!(tags_for(&conn, 2), vec!["physics.biology.cell"]);
+    }
+
+    #[test]
+    fn rename_a_subtag_updates_videos() {
+        let conn = setup();
+        add_tag(&conn, 1, "science.biology").unwrap();
+        add_tag(&conn, 2, "science.biology.cell").unwrap();
+
+        rename_tag_in_db(&conn, "science.biology", "science.bio").unwrap();
+
+        assert_eq!(tags_for(&conn, 1), vec!["science.bio"]);
+        assert_eq!(tags_for(&conn, 2), vec!["science.bio.cell"]);
+    }
+
+    #[test]
+    fn rename_changes_capitalization_everywhere() {
+        let conn = setup();
+        add_tag(&conn, 1, "science").unwrap();
+        add_tag(&conn, 1, "science.biology").unwrap();
+        add_tag(&conn, 2, "science.biology.cell").unwrap();
+
+        rename_tag_in_db(&conn, "science", "Science").unwrap();
+
+        assert_eq!(tags_for(&conn, 1), vec!["Science", "Science.biology"]);
+        assert_eq!(tags_for(&conn, 2), vec!["Science.biology.cell"]);
+    }
+
+    #[test]
+    fn rename_into_existing_tag_merges() {
+        let conn = setup();
+        add_tag(&conn, 1, "alpha").unwrap();
+        add_tag(&conn, 1, "beta").unwrap();
+        add_tag(&conn, 2, "alpha").unwrap();
+
+        rename_tag_in_db(&conn, "alpha", "beta").unwrap();
+
+        assert_eq!(tags_for(&conn, 1), vec!["beta"]);
+        assert_eq!(tags_for(&conn, 2), vec!["beta"]);
+    }
 }

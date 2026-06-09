@@ -11,6 +11,10 @@ export type Settings = {
   /// How far back to load a channel's videos when populating saved channels,
   /// in days. Default 14 (2 weeks); larger values pull more upload history.
   channelLookbackDays: number;
+  /// Default max resolution (in pixels of height) for one-click offline
+  /// downloads. 720 is the default; 0 means audio-only; 99999 means "best
+  /// available". The per-video pickers can override this per download.
+  offlineMaxHeight: number;
 };
 
 const DEFAULTS: Settings = {
@@ -18,6 +22,7 @@ const DEFAULTS: Settings = {
   autoFavorite: false,
   pollIntervalMinutes: 30,
   channelLookbackDays: 14,
+  offlineMaxHeight: 720,
 };
 
 export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [
@@ -42,6 +47,31 @@ export const CHANNEL_LOOKBACK_PRESETS: { value: number; label: string; hint: str
   { value: 1825, label: "5 years", hint: "Most of a channel's history" },
   { value: 3650, label: "10 years", hint: "As far back as practical — slowest to load" },
 ];
+
+/// The "best available" sentinel — caps nothing (download the highest stream).
+export const OFFLINE_BEST = 99999;
+/// The audio-only sentinel — extract an mp3 instead of a video file.
+export const OFFLINE_AUDIO = 0;
+
+/// Default-download quality presets. `value` is a max height in pixels, with
+/// two sentinels: OFFLINE_BEST ("best available") and OFFLINE_AUDIO ("audio
+/// only"). Anything above ~720p requires the bundled ffmpeg to merge streams.
+export const OFFLINE_QUALITY_PRESETS: { value: number; label: string; hint: string }[] = [
+  { value: OFFLINE_BEST, label: "Best available", hint: "Highest resolution — largest files" },
+  { value: 2160, label: "4K (2160p)", hint: "Very large files" },
+  { value: 1440, label: "1440p", hint: "Large files" },
+  { value: 1080, label: "1080p", hint: "Full HD" },
+  { value: 720, label: "720p", hint: "Default — good balance" },
+  { value: 480, label: "480p", hint: "Smaller files" },
+  { value: OFFLINE_AUDIO, label: "Audio only", hint: "MP3 — minimal storage" },
+];
+
+/// Human label for a max-height value (e.g. 1080 → "1080p").
+export function offlineQualityLabel(h: number): string {
+  if (h === OFFLINE_AUDIO) return "Audio";
+  if (h >= OFFLINE_BEST) return "Best";
+  return `${h}p`;
+}
 
 const STORAGE_KEY = "vidminder.settings.v1";
 

@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import type { Settings, Theme } from "../settings";
-import { CHANNEL_LOOKBACK_PRESETS, POLL_INTERVAL_PRESETS } from "../settings";
+import {
+  CHANNEL_LOOKBACK_PRESETS,
+  OFFLINE_QUALITY_PRESETS,
+  POLL_INTERVAL_PRESETS,
+} from "../settings";
 import { kbd } from "../platform";
 
 type Props = {
@@ -143,6 +147,33 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
 
         <section className="mt-6 pt-5 border-t border-line">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
+            Offline downloads
+          </div>
+          <select
+            value={settings.offlineMaxHeight}
+            onChange={(e) =>
+              onChange({ offlineMaxHeight: parseInt(e.target.value, 10) })
+            }
+            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+          >
+            {OFFLINE_QUALITY_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <div className="text-[11.5px] text-ink-faint mt-1">
+            Default quality for one-click downloads. Nothing downloads
+            automatically — use the download button on a video, or right-click it
+            to pick a specific resolution.{" "}
+            {OFFLINE_QUALITY_PRESETS.find(
+              (p) => p.value === settings.offlineMaxHeight
+            )?.hint ?? ""}
+          </div>
+        </section>
+
+        <section className="mt-6 pt-5 border-t border-line">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
             Library
           </div>
           <label className="flex items-start gap-3 cursor-pointer">
@@ -166,7 +197,8 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
           <ul className="list-disc pl-4 space-y-0.5">
             <li>Drop a video URL anywhere to add it to your list.</li>
             <li>Drop a channel URL (<code className="text-ink-dim">youtube.com/@channel</code>) to follow it.</li>
-            <li>Drag videos onto a folder, tag, or Favorites in the sidebar.</li>
+            <li>Drag videos onto a tag or Favorites in the sidebar.</li>
+            <li>Enter opens the selected video on YouTube · double-click plays the download if there is one.</li>
             <li>{kbd("Z")} undoes any change · Delete removes the highlighted video.</li>
           </ul>
         </section>

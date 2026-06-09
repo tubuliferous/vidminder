@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 /// Locate yt-dlp. In production we ship it as a Tauri sidecar so the binary
@@ -13,9 +15,42 @@ fn yt_dlp_command() -> Command {
     } else {
         Command::new("yt-dlp")
     };
+    augment_path(&mut cmd);
     suppress_console_on_windows(&mut cmd);
     cmd
 }
+
+/// Add common binary locations (and the bundled-sidecar dir) to the child's
+/// PATH. macOS GUI apps inherit a minimal PATH that omits Homebrew, so a
+/// PATH-resolved ffmpeg — needed to merge separate video+audio streams for any
+/// resolution above ~720p — silently goes missing and downloads end up as two
+/// unmerged fragments. This makes ffmpeg (and a PATH yt-dlp) discoverable.
+#[cfg(not(target_os = "windows"))]
+fn augment_path(cmd: &mut Command) {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(dir) = sidecar_dir() {
+        paths.push(dir);
+    }
+    for p in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        paths.push(std::path::PathBuf::from(p));
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        cmd.env("PATH", joined);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn augment_path(_cmd: &mut Command) {}
 
 /// On Windows, spawning a console subprocess from a GUI app pops up a flash of
 /// a black console window. CREATE_NO_WINDOW (0x08000000) suppresses it.
@@ -34,6 +69,31 @@ fn sidecar_path() -> Option<PathBuf> {
         "yt-dlp.exe"
     } else {
         "yt-dlp"
+    };
+    let candidate = dir.join(name);
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// The directory the bundled binaries live in (next to the main executable).
+/// In dev there is no sidecar dir, so this is None and we fall back to PATH.
+fn sidecar_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.parent().map(|p| p.to_path_buf())
+}
+
+/// Locate a bundled ffmpeg, if present. Used to merge separate video+audio
+/// streams (required for any resolution above ~720p). When absent, yt-dlp can
+/// still fetch progressive (already-merged) formats up to ~720p.
+fn ffmpeg_path() -> Option<PathBuf> {
+    let dir = sidecar_dir()?;
+    let name = if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
     };
     let candidate = dir.join(name);
     if candidate.is_file() {
@@ -68,6 +128,18 @@ pub struct YtdlpInfo {
     pub extractor: Option<String>,
     pub webpage_url: Option<String>,
     pub original_url: Option<String>,
+    #[serde(default)]
+    pub formats: Option<Vec<Format>>,
+}
+
+/// A single downloadable stream from yt-dlp's `formats` array. We only care
+/// about whether it carries video (`vcodec != "none"`) and its `height`.
+#[derive(Debug, Deserialize)]
+pub struct Format {
+    #[serde(default)]
+    pub height: Option<i64>,
+    #[serde(default)]
+    pub vcodec: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +152,10 @@ pub struct Thumbnail {
     #[serde(default)]
     #[allow(dead_code)]
     pub preference: Option<i32>,
+    /// yt-dlp's thumbnail id. For channels this distinguishes the square
+    /// "avatar_uncropped" from the wide "banner_uncropped".
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 impl YtdlpInfo {
@@ -112,6 +188,29 @@ impl YtdlpInfo {
 
     pub fn category(&self) -> Option<String> {
         self.categories.as_ref().and_then(|cs| cs.first().cloned())
+    }
+
+    /// Distinct video heights (e.g. 2160, 1440, 1080, 720, 480, 360) available
+    /// for this video, largest first. Audio-only formats (vcodec "none") are
+    /// excluded. Empty if yt-dlp returned no formats.
+    pub fn available_heights(&self) -> Vec<i64> {
+        let Some(formats) = &self.formats else {
+            return Vec::new();
+        };
+        let mut heights: Vec<i64> = formats
+            .iter()
+            .filter(|f| {
+                f.vcodec
+                    .as_deref()
+                    .map(|c| c != "none")
+                    .unwrap_or(false)
+            })
+            .filter_map(|f| f.height)
+            .filter(|&h| h > 0)
+            .collect();
+        heights.sort_unstable_by(|a, b| b.cmp(a));
+        heights.dedup();
+        heights
     }
 
     pub fn source(&self) -> String {
@@ -193,6 +292,12 @@ pub struct ChannelListing {
     pub webpage_url: Option<String>,
     pub extractor_key: Option<String>,
     pub extractor: Option<String>,
+    /// The channel's "about" blurb.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Subscriber count, when YouTube exposes it.
+    #[serde(default)]
+    pub channel_follower_count: Option<i64>,
     #[serde(default)]
     pub entries: Vec<ChannelEntry>,
 }
@@ -256,6 +361,38 @@ impl ChannelListing {
             }
         }
         best.map(|t| t.url.clone())
+    }
+
+    /// The channel's circular avatar URL — the square profile image, NOT the
+    /// wide banner. YouTube returns both in `thumbnails`; the avatar is tagged
+    /// with an "avatar…" id and is square, the banner is very wide. Prefer an
+    /// avatar-tagged or square thumbnail (largest known size); fall back to the
+    /// overall best thumbnail only if no avatar candidate exists.
+    pub fn best_avatar(&self) -> Option<String> {
+        let thumbs = self.thumbnails.as_ref()?;
+        let is_avatar = |t: &Thumbnail| {
+            t.id.as_deref().map(|i| i.starts_with("avatar")).unwrap_or(false)
+                || matches!((t.width, t.height), (Some(w), Some(h)) if w == h && w > 0)
+        };
+        let mut best: Option<&Thumbnail> = None;
+        for t in thumbs
+            .iter()
+            .filter(|t| !t.url.contains("storyboard") && is_avatar(t))
+        {
+            match best {
+                None => best = Some(t),
+                Some(cur) => {
+                    let cur_score = (cur.width.unwrap_or(0) as i64)
+                        * (cur.height.unwrap_or(0) as i64);
+                    let new_score = (t.width.unwrap_or(0) as i64)
+                        * (t.height.unwrap_or(0) as i64);
+                    if new_score > cur_score {
+                        best = Some(t);
+                    }
+                }
+            }
+        }
+        best.map(|t| t.url.clone()).or_else(|| self.best_thumbnail())
     }
 }
 
@@ -436,4 +573,218 @@ pub fn looks_like_channel_url(url: &str) -> bool {
         }
     }
     false
+}
+
+/// Result of a successful download.
+pub struct DownloadOutcome {
+    pub path: PathBuf,
+    pub size: i64,
+    /// Human label for what was fetched ("1080p", "Best", "Audio").
+    pub quality: String,
+}
+
+/// Download a single video into `dest_dir`, naming the file `<stem>.<ext>`.
+/// `max_height` caps the resolution: `None` = best available, `Some(0)` =
+/// audio-only mp3, `Some(h)` = best video at or below `h` pixels tall. Anything
+/// above ~720p needs the bundled ffmpeg to merge streams; without it yt-dlp
+/// falls back to progressive formats. `on_progress` is called with 0.0–100.0.
+pub async fn download_video<F>(
+    url: &str,
+    dest_dir: &Path,
+    stem: &str,
+    max_height: Option<i64>,
+    on_progress: F,
+) -> Result<DownloadOutcome>
+where
+    F: Fn(f64) + Send,
+{
+    std::fs::create_dir_all(dest_dir)
+        .with_context(|| format!("creating offline dir {}", dest_dir.display()))?;
+    // Clear any earlier file/fragments for this stem so the post-download glob
+    // is unambiguous.
+    remove_stem_files(dest_dir, stem);
+
+    let out_template = dest_dir.join(format!("{stem}.%(ext)s"));
+    let audio_only = max_height == Some(0);
+
+    let mut cmd = yt_dlp_command();
+    cmd.args(["--newline", "--no-warnings", "--no-playlist", "--no-part"])
+        .arg("-o")
+        .arg(&out_template);
+
+    if let Some(ff) = ffmpeg_path() {
+        cmd.arg("--ffmpeg-location").arg(ff);
+    }
+
+    let quality_label = if audio_only {
+        cmd.args(["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]);
+        "Audio".to_string()
+    } else {
+        let selector = match max_height {
+            Some(h) if h > 0 => format!("bv*[height<={h}]+ba/b[height<={h}]"),
+            _ => "bv*+ba/b".to_string(),
+        };
+        cmd.args(["-f", &selector, "--merge-output-format", "mp4"]);
+        // Download English subtitles (uploaded + auto-generated) alongside the
+        // video as .srt files AND embed them into the container. Use plain "en"
+        // — NOT "en.*", which also pulls every auto-translated track (en-de,
+        // en-fr, …), flooding YouTube and tripping HTTP 429. `--ignore-errors`
+        // keeps a subtitle hiccup from ever aborting the video download itself.
+        cmd.args([
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs",
+            "en",
+            "--convert-subs",
+            "srt",
+            "--embed-subs",
+            "--ignore-errors",
+        ]);
+        match max_height {
+            Some(h) if h > 0 => format!("{h}p"),
+            _ => "Best".to_string(),
+        }
+    };
+
+    cmd.arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().context("spawning yt-dlp download")?;
+    let stdout = child.stdout.take().context("capturing yt-dlp stdout")?;
+    let stderr = child.stderr.take().context("capturing yt-dlp stderr")?;
+
+    // Drain stderr concurrently so a full pipe can't deadlock the child.
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        buf
+    });
+
+    let mut lines = BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Some(pct) = parse_progress(&line) {
+            on_progress(pct);
+        }
+    }
+
+    let status = child.wait().await.context("waiting for yt-dlp")?;
+    let stderr_out = stderr_task.await.unwrap_or_default();
+    if !status.success() {
+        return Err(anyhow!(
+            "yt-dlp download failed ({status}): {}",
+            stderr_out.trim()
+        ));
+    }
+    on_progress(100.0);
+
+    let path = match find_stem_file(dest_dir, stem) {
+        Some(p) => p,
+        None => {
+            // Streams downloaded but no single merged file remains — almost
+            // always a broken or missing ffmpeg (the merge step failed). Give a
+            // message that points at the real cause.
+            if has_stem_fragments(dest_dir, stem) {
+                return Err(anyhow!(
+                    "couldn't merge audio + video — ffmpeg is missing or broken. \
+                     Try `brew reinstall ffmpeg`. {}",
+                    stderr_out.trim()
+                ));
+            }
+            return Err(anyhow!(
+                "download produced no file. {}",
+                stderr_out.trim()
+            ));
+        }
+    };
+    // Remove any leftover media fragments, but keep subtitle sidecars (.srt)
+    // so they sit next to the video. (yt-dlp normally deletes fragments after
+    // a successful merge; this is belt-and-suspenders.)
+    let keep_exts = ["srt", "vtt", "ass", "ssa"];
+    if let Ok(entries) = std::fs::read_dir(dest_dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if p == path || !name.starts_with(&format!("{stem}.")) {
+                continue;
+            }
+            let is_subtitle = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| keep_exts.contains(&x.to_ascii_lowercase().as_str()))
+                .unwrap_or(false);
+            if !is_subtitle {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+
+    let size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    Ok(DownloadOutcome {
+        path,
+        size,
+        quality: quality_label,
+    })
+}
+
+/// True if any `<stem>.*` file is left in `dir` — used to distinguish a failed
+/// merge (leftover fragments) from a download that produced nothing at all.
+fn has_stem_fragments(dir: &Path, stem: &str) -> bool {
+    std::fs::read_dir(dir)
+        .ok()
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{stem}."))
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Parse a yt-dlp "[download]  42.3% of ..." line into a percent (0.0–100.0).
+fn parse_progress(line: &str) -> Option<f64> {
+    let line = line.trim();
+    if !line.starts_with("[download]") {
+        return None;
+    }
+    let token = line.split_whitespace().find(|t| t.ends_with('%'))?;
+    token.trim_end_matches('%').parse::<f64>().ok()
+}
+
+/// Does `name` look like exactly `<stem>.<ext>` (single extension, no fragment
+/// markers like `<stem>.f137.mp4`)? Guards against `<stem>` being a prefix of a
+/// different id's file.
+fn file_matches_stem(name: &std::ffi::OsStr, stem: &str) -> bool {
+    match name.to_string_lossy().strip_prefix(stem) {
+        Some(rest) => rest.starts_with('.') && !rest[1..].contains('.'),
+        None => false,
+    }
+}
+
+/// Remove a stem's downloaded file plus any leftover fragments. Public so the
+/// command layer can clean up after a cancelled or deleted download.
+pub fn remove_stem_files(dir: &Path, stem: &str) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            // Remove the final file plus any leftover fragments for this stem.
+            if e.file_name().to_string_lossy().starts_with(&format!("{stem}.")) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+fn find_stem_file(dir: &Path, stem: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| file_matches_stem(&e.file_name(), stem))
+        .map(|e| e.path())
 }

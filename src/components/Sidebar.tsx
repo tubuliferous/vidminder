@@ -14,7 +14,6 @@ type Props = {
   refreshing: boolean;
   onFollowClick: () => void;
   draggingVideo: boolean;
-  onDropToFolder: (videoId: number, folder: string) => void;
   onDropToTag: (videoId: number, tag: string) => void;
   onDropUrlToTag: (url: string, tag: string) => void;
   onRenameTag: (oldTag: string, newTag: string) => void;
@@ -28,21 +27,21 @@ type Props = {
 
 function counts(videos: Video[]) {
   const tagCounts = new Map<string, number>();
-  const folders = new Map<string, number>();
   const categories = new Map<string, number>();
   let watched = 0;
   let favorites = 0;
+  let downloaded = 0;
   for (const v of videos) {
     if (v.watched) watched += 1;
     if (v.favorite) favorites += 1;
+    if (v.offline_status === "ready") downloaded += 1;
     for (const t of v.user_tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
-    if (v.folder) folders.set(v.folder, (folders.get(v.folder) ?? 0) + 1);
     if (v.category) categories.set(v.category, (categories.get(v.category) ?? 0) + 1);
   }
   const tags: TagCount[] = [...tagCounts.entries()]
     .map(([tag, count]) => ({ tag, count }))
     .sort((a, b) => a.tag.localeCompare(b.tag));
-  return { tags, folders, categories, watched, favorites };
+  return { tags, categories, watched, favorites, downloaded };
 }
 
 function sortByCount(m: Map<string, number>) {
@@ -144,6 +143,7 @@ function Chevron({ expanded }: { expanded: boolean }) {
 type RowProps = {
   active: boolean;
   label: string;
+  icon?: React.ReactNode;
   count?: number;
   badge?: number;
   onClick: () => void;
@@ -155,6 +155,7 @@ type RowProps = {
 function Row({
   active,
   label,
+  icon,
   count,
   badge,
   onClick,
@@ -229,7 +230,12 @@ function Row({
       {/* pointer-events-none on children so dragenter/leave only fire on the
           button itself — without it, moving across nested spans counted as
           enter/leave events and made the hover state flicker. */}
-      <span className="pointer-events-none truncate flex-1">{label}</span>
+      <span className="pointer-events-none truncate flex-1 flex items-center gap-1.5">
+        {icon != null && (
+          <span className="shrink-0 text-ink-faint">{icon}</span>
+        )}
+        <span className="truncate">{label}</span>
+      </span>
       <span className="pointer-events-none flex items-center gap-1.5">
         {badge != null && badge > 0 && (
           <span
@@ -270,7 +276,6 @@ export function Sidebar({
   refreshing,
   onFollowClick,
   draggingVideo,
-  onDropToFolder,
   onDropToTag,
   onDropUrlToTag,
   onRenameTag,
@@ -324,6 +329,7 @@ export function Sidebar({
           <Row
             active={isActive({ kind: "unwatched" })}
             label="Unwatched"
+            icon={<EyeOffIcon />}
             count={unwatched}
             onClick={() => onFilter({ kind: "unwatched" })}
             dropTarget
@@ -333,11 +339,18 @@ export function Sidebar({
           <Row
             active={isActive({ kind: "watched" })}
             label="Watched"
+            icon={<EyeIcon />}
             count={c.watched}
             onClick={() => onFilter({ kind: "watched" })}
             dropTarget
             draggingVideo={draggingVideo}
             onDropVideo={onDropToWatched}
+          />
+          <Row
+            active={isActive({ kind: "downloaded" })}
+            label="⤓ Downloaded"
+            count={c.downloaded}
+            onClick={() => onFilter({ kind: "downloaded" })}
           />
         </Section>
 
@@ -384,23 +397,6 @@ export function Sidebar({
             />
           )}
         </Section>
-
-        {c.folders.size > 0 && (
-          <Section title="Folders" storageKey="folders">
-            {sortByCount(c.folders).map(([name, n]) => (
-              <Row
-                key={"f:" + name}
-                active={isActive({ kind: "folder", name })}
-                label={name}
-                count={n}
-                onClick={() => onFilter({ kind: "folder", name })}
-                dropTarget
-                draggingVideo={draggingVideo}
-                onDropVideo={(id) => onDropToFolder(id, name)}
-              />
-            ))}
-          </Section>
-        )}
 
         {c.tags.length > 0 && (
           <Section title="Tags" storageKey="tags">
@@ -611,7 +607,10 @@ function ChannelRow({
           : "text-ink-dim hover:bg-surface-2 hover:text-ink")
       }
     >
-      <span className="truncate flex-1">{channel.name}</span>
+      <span className="flex items-center gap-2 min-w-0 flex-1">
+        <ChannelAvatar url={channel.thumbnail_url} name={channel.name} />
+        <span className="truncate">{channel.name}</span>
+      </span>
       <span className="flex items-center gap-1.5 shrink-0">
         <button
           onClick={beginEdit}
@@ -638,6 +637,30 @@ function ChannelRow({
         )}
       </span>
     </div>
+  );
+}
+
+/// Small round channel avatar shown left of the name. Falls back to the first
+/// letter on a tinted circle when there's no image or it fails to load.
+function ChannelAvatar({ url, name }: { url: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="w-4 h-4 rounded-full object-cover shrink-0 bg-surface-2"
+      />
+    );
+  }
+  const initial = name.trim().charAt(0).toUpperCase() || "?";
+  return (
+    <span className="w-4 h-4 rounded-full shrink-0 bg-surface-2 text-ink-faint text-[9px] font-semibold flex items-center justify-center">
+      {initial}
+    </span>
   );
 }
 
@@ -1062,6 +1085,44 @@ function TagIcon() {
     >
       <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
       <line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24" />
+      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" y1="2" x2="22" y2="22" />
     </svg>
   );
 }

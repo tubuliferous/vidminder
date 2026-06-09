@@ -4,10 +4,11 @@ mod ytdlp;
 
 use db::{Channel, ChannelVideo, Db, NewChannel, NewChannelVideo, NewVideo, TagCount, Video};
 use serde::Serialize;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 
 const INITIAL_REFRESH_DELAY_SECS: u64 = 8;
 // The channel "load videos" lookback window. Default is 2 weeks; the user can
@@ -53,6 +54,110 @@ fn is_recent(timestamp: Option<i64>, window_secs: i64) -> bool {
     let Some(ts) = timestamp else { return false };
     let now = now_secs();
     ts > 0 && (now - ts) <= window_secs
+}
+
+/// How many video downloads may run at once. yt-dlp + ffmpeg are heavy, so keep
+/// this small; the rest queue behind the semaphore.
+const MAX_CONCURRENT_DOWNLOADS: usize = 3;
+
+/// Tracks in-flight offline downloads so they can be cancelled, and bounds how
+/// many run concurrently. Held as managed Tauri state.
+struct DownloadManager {
+    /// video id -> the running task's handle (for cancellation).
+    tasks: StdMutex<HashMap<i64, tauri::async_runtime::JoinHandle<()>>>,
+    gate: Arc<Semaphore>,
+}
+
+/// Progress payload emitted to the frontend as a download advances. `status` is
+/// one of "downloading", "ready", "error", or "none".
+#[derive(Clone, Serialize)]
+struct DownloadProgress {
+    id: i64,
+    percent: f64,
+    status: &'static str,
+    /// On failure, a human-readable reason the frontend can surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+/// Directory holding downloaded media, alongside the sqlite DB.
+fn offline_dir() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("VidMinder").join("offline"))
+}
+
+/// Begin (or no-op if already running) an offline download for one video.
+/// Returns immediately; progress and completion are reported via events.
+fn start_download(app: &AppHandle, video_id: i64, max_height: Option<i64>) -> AppResult<()> {
+    let db = app.state::<Db>();
+    let url = with_conn(&db, |conn| db::get_video(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video not found".into()))?
+        .url;
+
+    let mgr = app.state::<DownloadManager>();
+    if mgr.tasks.lock().unwrap().contains_key(&video_id) {
+        return Ok(()); // already downloading
+    }
+
+    let dest = offline_dir().ok_or_else(|| AppError::Generic("no data directory".into()))?;
+    with_conn(&db, |conn| db::set_offline_status(conn, video_id, "downloading"))?;
+    let _ = app.emit("videos-changed", ());
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress { id: video_id, percent: 0.0, status: "downloading", message: None },
+    );
+
+    let gate = mgr.gate.clone();
+    let app2 = app.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        let _permit = gate.acquire().await; // bounded concurrency
+        let stem = video_id.to_string();
+        let progress_app = app2.clone();
+        let result = ytdlp::download_video(&url, &dest, &stem, max_height, move |pct| {
+            let _ = progress_app.emit(
+                "download-progress",
+                DownloadProgress { id: video_id, percent: pct, status: "downloading", message: None },
+            );
+        })
+        .await;
+
+        let db = app2.state::<Db>();
+        match result {
+            Ok(outcome) => {
+                let path = outcome.path.to_string_lossy().to_string();
+                let _ = with_conn(&db, |conn| {
+                    db::set_offline_ready(conn, video_id, &path, &outcome.quality, outcome.size)
+                });
+                let _ = app2.emit(
+                    "download-progress",
+                    DownloadProgress { id: video_id, percent: 100.0, status: "ready", message: None },
+                );
+            }
+            Err(e) => {
+                let _ = with_conn(&db, |conn| db::set_offline_status(conn, video_id, "error"));
+                let msg = format!("{e:#}");
+                eprintln!("offline download failed for video {video_id}: {msg}");
+                let _ = app2.emit(
+                    "download-progress",
+                    DownloadProgress {
+                        id: video_id,
+                        percent: 0.0,
+                        status: "error",
+                        // Keep the toast readable — trim to the first line/200 chars.
+                        message: Some(truncate_msg(&msg)),
+                    },
+                );
+            }
+        }
+        let _ = app2.emit("videos-changed", ());
+        app2.state::<DownloadManager>()
+            .tasks
+            .lock()
+            .unwrap()
+            .remove(&video_id);
+    });
+
+    mgr.tasks.lock().unwrap().insert(video_id, handle);
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -204,7 +309,9 @@ async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult
     let canonical_url = listing.canonical_url().unwrap_or_else(|| url.to_string());
     let name = listing.name();
     let source = listing.source();
-    let thumb = listing.best_thumbnail();
+    let thumb = listing.best_avatar();
+    let description = listing.description.clone();
+    let subscriber_count = listing.channel_follower_count;
     let external_id = listing.channel_id.clone().or_else(|| listing.id.clone());
 
     // Replace approximate timestamps with exact ones from YouTube's RSS feed.
@@ -228,6 +335,8 @@ async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult
                     channel_id: external_id.as_deref(),
                     name: &name,
                     thumbnail_url: thumb.as_deref(),
+                    description: description.as_deref(),
+                    subscriber_count,
                 },
             )
             .map_err(|e| AppError::Generic(format!("{e:#}")))?
@@ -701,8 +810,148 @@ fn list_videos(db: State<'_, Db>) -> AppResult<Vec<Video>> {
 }
 
 #[tauri::command]
-fn delete_video(id: i64, db: State<'_, Db>) -> AppResult<()> {
-    with_conn(&db, |conn| db::delete_video(conn, id))
+fn delete_video(id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    // Cancel any in-flight download and remove the offline file(s) before the
+    // row goes away.
+    if let Some(h) = app
+        .state::<DownloadManager>()
+        .tasks
+        .lock()
+        .unwrap()
+        .remove(&id)
+    {
+        h.abort();
+    }
+    let prev = with_conn(&db, |conn| db::get_offline_path(conn, id))?;
+    with_conn(&db, |conn| db::delete_video(conn, id))?;
+    if let Some(p) = prev {
+        let _ = std::fs::remove_file(&p);
+    }
+    if let Some(dir) = offline_dir() {
+        ytdlp::remove_stem_files(&dir, &id.to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_video_formats(video_id: i64, app: AppHandle) -> AppResult<Vec<i64>> {
+    let url = {
+        let db = app.state::<Db>();
+        with_conn(&db, |conn| db::get_video(conn, video_id))?
+            .ok_or_else(|| AppError::Generic("video not found".into()))?
+            .url
+    };
+    let info = ytdlp::fetch_info(&url)
+        .await
+        .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
+    Ok(info.available_heights())
+}
+
+#[tauri::command]
+fn download_video(video_id: i64, max_height: Option<i64>, app: AppHandle) -> AppResult<()> {
+    start_download(&app, video_id, max_height)
+}
+
+#[tauri::command]
+fn download_videos(video_ids: Vec<i64>, max_height: Option<i64>, app: AppHandle) -> AppResult<()> {
+    for id in video_ids {
+        // Ignore per-video errors so one bad id doesn't abort the batch.
+        let _ = start_download(&app, id, max_height);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_download(video_id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    if let Some(h) = app
+        .state::<DownloadManager>()
+        .tasks
+        .lock()
+        .unwrap()
+        .remove(&video_id)
+    {
+        h.abort();
+    }
+    with_conn(&db, |conn| db::set_offline_status(conn, video_id, "none"))?;
+    if let Some(dir) = offline_dir() {
+        ytdlp::remove_stem_files(&dir, &video_id.to_string());
+    }
+    let _ = app.emit("videos-changed", ());
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress { id: video_id, percent: 0.0, status: "none", message: None },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_offline(video_id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<()> {
+    if let Some(h) = app
+        .state::<DownloadManager>()
+        .tasks
+        .lock()
+        .unwrap()
+        .remove(&video_id)
+    {
+        h.abort();
+    }
+    let prev = with_conn(&db, |conn| db::clear_offline(conn, video_id))?;
+    if let Some(p) = prev {
+        let _ = std::fs::remove_file(&p);
+    }
+    if let Some(dir) = offline_dir() {
+        ytdlp::remove_stem_files(&dir, &video_id.to_string());
+    }
+    let _ = app.emit("videos-changed", ());
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress { id: video_id, percent: 0.0, status: "none", message: None },
+    );
+    Ok(())
+}
+
+/// Open a downloaded video in the OS default app. Returns `true` if the offline
+/// file was opened. If the file is gone (deleted outside the app), the video's
+/// offline state is reset to "none" and `false` is returned so the caller can
+/// fall back to opening the video online.
+#[tauri::command]
+fn open_offline(video_id: i64, app: AppHandle, db: State<'_, Db>) -> AppResult<bool> {
+    let path = with_conn(&db, |conn| db::get_offline_path(conn, video_id))?;
+    if let Some(p) = path {
+        if std::path::Path::new(&p).is_file() {
+            open_in_default_app(&p)?;
+            return Ok(true);
+        }
+    }
+    // The file no longer exists — clear the stale offline state and tell the
+    // frontend so it can open the video online instead.
+    let _ = with_conn(&db, |conn| db::clear_offline(conn, video_id));
+    let _ = app.emit("videos-changed", ());
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress { id: video_id, percent: 0.0, status: "none", message: None },
+    );
+    Ok(false)
+}
+
+/// Open a local file in the OS default app. Uses the platform's native open
+/// tool directly rather than the opener plugin, so it isn't gated by webview
+/// capabilities (which were blocking open_path).
+fn open_in_default_app(path: &str) -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut cmd = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    };
+    cmd.arg(path);
+    cmd.spawn()
+        .map_err(|e| AppError::Generic(format!("couldn't open file: {e}")))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -728,9 +977,6 @@ fn restore_video(video: Video, db: State<'_, Db>) -> AppResult<Video> {
             },
             video.added_at,
         )?;
-        if let Some(f) = &video.folder {
-            db::set_folder(conn, id, Some(f))?;
-        }
         if video.watched {
             db::set_watched(conn, id, true)?;
         }
@@ -743,15 +989,6 @@ fn restore_video(video: Video, db: State<'_, Db>) -> AppResult<Video> {
         db::get_video(conn, id)?
             .ok_or_else(|| anyhow::anyhow!("restored video missing"))
     })
-}
-
-#[tauri::command]
-fn set_folder(id: i64, folder: Option<String>, db: State<'_, Db>) -> AppResult<()> {
-    let f = folder
-        .as_deref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-    with_conn(&db, |conn| db::set_folder(conn, id, f))
 }
 
 #[tauri::command]
@@ -778,11 +1015,6 @@ fn remove_tag(id: i64, tag: String, db: State<'_, Db>) -> AppResult<Vec<String>>
         db::remove_tag(conn, id, &tag)?;
         db::list_tags_for_video(conn, id)
     })
-}
-
-#[tauri::command]
-fn list_folders(db: State<'_, Db>) -> AppResult<Vec<String>> {
-    with_conn(&db, |conn| db::list_folders(conn))
 }
 
 #[tauri::command]
@@ -975,6 +1207,16 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
                 }
             }
             let _ = db::set_last_checked(&conn, ch.id, now_secs());
+            // Backfill/refresh channel display metadata: the round avatar (older
+            // versions stored the wide banner), the about blurb, and the
+            // subscriber count. NULLs preserve whatever's already stored.
+            let _ = db::update_channel_meta(
+                &conn,
+                ch.id,
+                listing.best_avatar().as_deref(),
+                listing.description.as_deref(),
+                listing.channel_follower_count,
+            );
         }
 
         // After timestamp backfills, surface anything the original "pre-dismiss
@@ -995,6 +1237,16 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Condense an error for a toast: first line, capped at ~200 chars.
+fn truncate_msg(msg: &str) -> String {
+    let first = msg.lines().next().unwrap_or(msg).trim();
+    if first.chars().count() > 200 {
+        format!("{}…", first.chars().take(200).collect::<String>())
+    } else {
+        first.to_string()
+    }
 }
 
 fn spawn_background_refresh(app: AppHandle) {
@@ -1041,6 +1293,10 @@ pub fn run() {
             app.manage(AppConfig {
                 lookback_secs: std::sync::atomic::AtomicI64::new(DEFAULT_LOOKBACK_SECS),
             });
+            app.manage(DownloadManager {
+                tasks: StdMutex::new(HashMap::new()),
+                gate: Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS)),
+            });
             spawn_background_refresh(app.handle().clone());
             Ok(())
         })
@@ -1064,12 +1320,16 @@ pub fn run() {
             list_videos,
             delete_video,
             restore_video,
-            set_folder,
+            list_video_formats,
+            download_video,
+            download_videos,
+            cancel_download,
+            delete_offline,
+            open_offline,
             set_watched,
             set_favorite,
             add_tag,
             remove_tag,
-            list_folders,
             list_tags,
             list_tag_counts,
             set_video_tags,

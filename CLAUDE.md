@@ -37,10 +37,43 @@ literals** — every occurrence must come from `kbd()` / `mod` / `kbdClick`.
 The only legitimate raw `⌘`/`Ctrl` references are inside `src/platform.ts`
 itself, in source-code comments, and in this file.
 
+## Working efficiently (token hygiene)
+
+This repo is large; a few habits keep context and cost under control.
+
+- **Don't read big files whole.** The large ones: `src/App.tsx` (~2500 lines —
+  top-level state, handlers, layout), `src-tauri/src/lib.rs` (Tauri commands),
+  `src-tauri/src/db.rs` (sqlite), `src/components/Sidebar.tsx`. Grep for the
+  symbol first, then Read with `offset`/`limit` around the hit.
+- **Never read build artifacts / binaries.** `src-tauri/target/`, `dist/`,
+  `node_modules/`, `src-tauri/binaries/` (bundled yt-dlp + ffmpeg, tens of MB),
+  icons, and lockfiles are denied in `.claude/settings.json` and gitignored
+  (so Grep/Glob already skip them). Note: `.claudeignore` is **not** a real
+  Claude Code feature — use `.gitignore` + `permissions.deny` instead.
+- **Where things live:**
+  - Backend (`src-tauri/src/`): `lib.rs` = Tauri commands + orchestration;
+    `db.rs` = schema + queries; `ytdlp.rs` = yt-dlp/ffmpeg sidecar, format
+    listing, and offline downloads; `youtube_rss.rs` = RSS timestamps.
+  - Frontend (`src/`): `App.tsx` = state/handlers/layout; `components/*` =
+    one file per panel/dialog; `api.ts` = `invoke` wrappers; `settings.ts`,
+    `types.ts`, `utils.ts`, `platform.ts`.
+  - **Offline downloads:** `ytdlp.rs::download_video` + the `download_video` /
+    `download_videos` / `cancel_download` / `delete_offline` /
+    `list_video_formats` commands in `lib.rs`; UI in `VideoCard.tsx`,
+    `DownloadQualityMenu.tsx`, the OfflineSection in `VideoDetails.tsx`, and the
+    batch control in `MultiVideoDetails.tsx`. Files land in
+    `~/Library/Application Support/VidMinder/offline/`.
+- `App.tsx` is the main token sink and a good split candidate (extract handler
+  groups into hooks like `useDownloads`/`useChannels`) — do it when the current
+  feature is stable, not mid-change.
+
 ## Other project notes
 
-- The yt-dlp sidecar lives at `src-tauri/binaries/yt-dlp-<target-triple>`.
-  Run `npm run install-sidecar` after a fresh clone to symlink it.
+- The yt-dlp sidecar lives at `src-tauri/binaries/yt-dlp-<target-triple>` and
+  ffmpeg at `src-tauri/binaries/ffmpeg-<target-triple>`. Run
+  `npm run install-sidecar` after a fresh clone (symlinks yt-dlp from PATH;
+  always downloads a self-contained **static** ffmpeg so the bundle ships
+  complete and doesn't depend on a system/Homebrew ffmpeg).
 - Dev: `npm run tauri dev` from project root.
 - Release: bump `package.json`, `src-tauri/Cargo.toml`, and
   `src-tauri/tauri.conf.json` to the same version; commit; tag `vX.Y.Z`;

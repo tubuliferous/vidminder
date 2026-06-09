@@ -1,39 +1,48 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Video } from "../types";
 import { kbdClick, shiftClick } from "../platform";
+import { OFFLINE_QUALITY_PRESETS } from "../settings";
 
 type Props = {
   videos: Video[];
-  knownFolders: string[];
   /** Every distinct full dotted tag in use library-wide — fuels the
    *  nesting-aware autocomplete on the bulk-add input. */
   allTags: string[];
   onSetWatched: (videos: Video[], watched: boolean) => void;
   onSetFavorite: (videos: Video[], favorite: boolean) => void;
-  onSetFolder: (videos: Video[], folder: string | null) => void;
   onAddTag: (videos: Video[], tag: string) => void;
   onRemoveTag: (videos: Video[], tag: string) => void;
   onDeleteAll: (videos: Video[]) => void;
   onClearSelection: () => void;
+  /// The user's default download quality — seeds the batch resolution picker.
+  defaultMaxHeight: number;
+  /// Download the given videos, each capped at `maxHeight`.
+  onBatchDownload: (videos: Video[], maxHeight: number) => void;
 };
 
 export function MultiVideoDetails({
   videos,
-  knownFolders,
   allTags,
   onSetWatched,
   onSetFavorite,
-  onSetFolder,
   onAddTag,
   onRemoveTag,
   onDeleteAll,
   onClearSelection,
+  defaultMaxHeight,
+  onBatchDownload,
 }: Props) {
   const n = videos.length;
   const [tagInput, setTagInput] = useState("");
   const [hi, setHi] = useState(0);
-  const [folderInput, setFolderInput] = useState("");
-  const [editingFolder, setEditingFolder] = useState(false);
+  const [batchChoice, setBatchChoice] = useState<number>(defaultMaxHeight);
+
+  // Offline tallies + the subset that can still be downloaded.
+  const offlineReady = videos.filter((v) => v.offline_status === "ready").length;
+  const offlineActive = videos.filter((v) => v.offline_status === "downloading").length;
+  const downloadable = videos.filter(
+    (v) => v.offline_status !== "ready" && v.offline_status !== "downloading"
+  );
 
   // Derive group-level state for the buttons.
   const watchedAll = videos.every((v) => v.watched);
@@ -43,24 +52,6 @@ export function MultiVideoDetails({
   const favoritedAll = videos.every((v) => v.favorite);
   const favoritedNone = videos.every((v) => !v.favorite);
   const favoritedMixed = !favoritedAll && !favoritedNone;
-
-  // Folder consensus
-  const folderSet = useMemo(() => {
-    const s = new Set<string>();
-    let hasNull = false;
-    for (const v of videos) {
-      if (v.folder) s.add(v.folder);
-      else hasNull = true;
-    }
-    return { set: s, hasNull };
-  }, [videos]);
-  const folderConsensus: string | null | "mixed" = useMemo(() => {
-    if (folderSet.set.size === 0 && folderSet.hasNull) return null;
-    if (folderSet.set.size === 1 && !folderSet.hasNull) {
-      return [...folderSet.set][0];
-    }
-    return "mixed";
-  }, [folderSet]);
 
   // Tag breakdown: shared vs partial vs all-distinct
   const { sharedTags, partialTags } = useMemo(() => {
@@ -90,11 +81,7 @@ export function MultiVideoDetails({
   useEffect(() => {
     setTagInput("");
     setHi(0);
-    setEditingFolder(false);
-    setFolderInput(
-      folderConsensus && folderConsensus !== "mixed" ? folderConsensus : ""
-    );
-  }, [videos.map((v) => v.id).join(","), folderConsensus]);
+  }, [videos.map((v) => v.id).join(",")]);
 
   // Nesting-aware autocomplete. Same logic as the single-video editor's
   // TagEditor — anchored to the dotted parent the user has typed.
@@ -133,12 +120,6 @@ export function MultiVideoDetails({
     onAddTag(videos, t);
     setTagInput("");
     setHi(0);
-  };
-
-  const saveFolder = () => {
-    const next = folderInput.trim() || null;
-    onSetFolder(videos, next);
-    setEditingFolder(false);
   };
 
   // Watched / favorite labels & next states
@@ -212,62 +193,38 @@ export function MultiVideoDetails({
 
         <div>
           <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
-            Folder
-            {folderConsensus === "mixed" && (
-              <span className="ml-2 text-[10px] normal-case tracking-normal text-accent/85">
-                mixed
-              </span>
-            )}
+            Offline
           </label>
-          {editingFolder ? (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={folderInput}
-                onChange={(e) => setFolderInput(e.target.value)}
-                list="folders-list"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") saveFolder();
-                  if (e.key === "Escape") setEditingFolder(false);
-                }}
-                placeholder={
-                  folderConsensus === "mixed"
-                    ? "Type to set all selected to one folder"
-                    : "Folder name (blank to clear)"
-                }
-                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
-              />
-              <datalist id="folders-list">
-                {knownFolders.map((f) => (
-                  <option key={f} value={f} />
-                ))}
-              </datalist>
-              <button
-                onClick={saveFolder}
-                className="text-[12px] px-2.5 rounded-md bg-surface-2 hover:bg-line"
-              >
-                Apply
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setEditingFolder(true)}
-              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line hover:border-line-soft text-ink-dim hover:text-ink"
+          <div className="text-[12px] text-ink-dim mb-2">
+            {offlineReady} of {n} downloaded
+            {offlineActive > 0 ? ` · ${offlineActive} in progress` : ""}
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={batchChoice}
+              onChange={(e) => setBatchChoice(parseInt(e.target.value, 10))}
+              className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+              title="Each video downloads at this resolution, or the highest it offers below it"
             >
-              {folderConsensus === "mixed" ? (
-                <span className="text-ink-faint">
-                  Mixed — click to set all
-                </span>
-              ) : folderConsensus ? (
-                folderConsensus
-              ) : (
-                <span className="text-ink-faint">
-                  No folder — click to set
-                </span>
-              )}
+              {OFFLINE_QUALITY_PRESETS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={downloadable.length === 0}
+              onClick={() => onBatchDownload(downloadable, batchChoice)}
+              className={
+                "text-[13px] font-medium py-2 px-3 rounded-md transition " +
+                (downloadable.length === 0
+                  ? "bg-surface-2 text-ink-faint cursor-default"
+                  : "bg-accent text-black hover:brightness-110")
+              }
+            >
+              Download {downloadable.length}
             </button>
-          )}
+          </div>
         </div>
 
         <div>

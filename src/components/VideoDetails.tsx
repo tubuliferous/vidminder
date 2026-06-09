@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Channel, Video } from "../types";
 import { formatAddedAt, formatDuration, formatUploadDate } from "../utils";
 import { kbd } from "../platform";
+import { OFFLINE_AUDIO, OFFLINE_BEST } from "../settings";
 import * as api from "../api";
 
 type Props = {
   video: Video;
-  knownFolders: string[];
   followedChannels: Channel[];
   /** Every distinct full dotted tag currently in use across the library —
    *  powers nesting-aware autocomplete in the tag editor. */
@@ -15,44 +15,42 @@ type Props = {
    *  commits the whole set on each Enter/Backspace edit; the parent
    *  canonicalizes via the backend. */
   onSetTags: (video: Video, tags: string[]) => void;
-  onSetFolder: (video: Video, folder: string | null) => void;
   onToggleWatched: (video: Video) => void;
   onToggleFavorite: (video: Video) => void;
   onOpen: (video: Video) => void;
   onRequestDelete: () => void;
   onFollowChannel: (video: Video) => void;
+  /// Live download percent (0–100) while this video is downloading.
+  offlinePercent?: number;
+  /// The user's default download quality (settings.offlineMaxHeight) — seeds
+  /// the resolution picker.
+  defaultMaxHeight: number;
+  onDownload: (video: Video, maxHeight: number) => void;
+  onCancelDownload: (video: Video) => void;
+  onPlayOffline: (video: Video) => void;
+  onDeleteOffline: (video: Video) => void;
 };
 
 export function VideoDetails({
   video,
-  knownFolders,
   followedChannels,
   allTags,
   onSetTags,
-  onSetFolder,
   onToggleWatched,
   onToggleFavorite,
   onOpen,
   onRequestDelete,
   onFollowChannel,
+  offlinePercent,
+  defaultMaxHeight,
+  onDownload,
+  onCancelDownload,
+  onPlayOffline,
+  onDeleteOffline,
 }: Props) {
-  const [folderInput, setFolderInput] = useState(video.folder ?? "");
-  const [editingFolder, setEditingFolder] = useState(false);
-
-  useEffect(() => {
-    setFolderInput(video.folder ?? "");
-    setEditingFolder(false);
-  }, [video.id]);
-
   const isFollowed =
     !!video.channel_url && followedChannels.some((c) => c.url === video.channel_url);
   const canFollow = !!video.channel_url && !isFollowed;
-
-  const saveFolder = () => {
-    const next = folderInput.trim() || null;
-    onSetFolder(video, next);
-    setEditingFolder(false);
-  };
 
   return (
     <div className="h-full overflow-y-auto border-l border-line bg-surface flex flex-col">
@@ -162,51 +160,15 @@ export function VideoDetails({
           </button>
         </div>
 
-        <div>
-          <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
-            Folder
-          </label>
-          {editingFolder ? (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={folderInput}
-                onChange={(e) => setFolderInput(e.target.value)}
-                list="folders-list"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") saveFolder();
-                  if (e.key === "Escape") {
-                    setFolderInput(video.folder ?? "");
-                    setEditingFolder(false);
-                  }
-                }}
-                placeholder="No folder"
-                className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
-              />
-              <datalist id="folders-list">
-                {knownFolders.map((f) => (
-                  <option key={f} value={f} />
-                ))}
-              </datalist>
-              <button
-                onClick={saveFolder}
-                className="text-[12px] px-2.5 rounded-md bg-surface-2 hover:bg-line"
-              >
-                Save
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setEditingFolder(true)}
-              className="w-full text-left text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line hover:border-line-soft text-ink-dim hover:text-ink"
-            >
-              {video.folder || (
-                <span className="text-ink-faint">No folder — click to set</span>
-              )}
-            </button>
-          )}
-        </div>
+        <OfflineSection
+          video={video}
+          percent={offlinePercent}
+          defaultMaxHeight={defaultMaxHeight}
+          onDownload={onDownload}
+          onCancelDownload={onCancelDownload}
+          onPlayOffline={onPlayOffline}
+          onDeleteOffline={onDeleteOffline}
+        />
 
         <TagEditor video={video} allTags={allTags} onSetTags={onSetTags} />
 
@@ -257,6 +219,164 @@ export function VideoDetails({
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Offline download controls — status, a per-video resolution picker, and
+// play/remove actions. The available resolutions are fetched on demand.
+// ---------------------------------------------------------------------------
+function OfflineSection({
+  video,
+  percent,
+  defaultMaxHeight,
+  onDownload,
+  onCancelDownload,
+  onPlayOffline,
+  onDeleteOffline,
+}: {
+  video: Video;
+  percent?: number;
+  defaultMaxHeight: number;
+  onDownload: (video: Video, maxHeight: number) => void;
+  onCancelDownload: (video: Video) => void;
+  onPlayOffline: (video: Video) => void;
+  onDeleteOffline: (video: Video) => void;
+}) {
+  const [heights, setHeights] = useState<number[] | null>(null);
+  const [choice, setChoice] = useState<number>(defaultMaxHeight);
+  const status = video.offline_status;
+
+  useEffect(() => {
+    setChoice(defaultMaxHeight);
+    // Only the not-yet-downloaded states need the resolution list.
+    if (status === "ready" || status === "downloading") {
+      setHeights(null);
+      return;
+    }
+    let alive = true;
+    api
+      .listVideoFormats(video.id)
+      .then((hs) => {
+        if (alive) setHeights(hs);
+      })
+      .catch(() => {
+        if (alive) setHeights([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [video.id, status, defaultMaxHeight]);
+
+  const label = (
+    <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
+      Offline
+    </label>
+  );
+
+  if (status === "downloading") {
+    const pct = Math.round(percent ?? 0);
+    return (
+      <div>
+        {label}
+        <div className="h-2 rounded-full bg-surface-2 overflow-hidden">
+          <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="mt-1.5 flex items-center justify-between text-[12px] text-ink-dim">
+          <span>Downloading… {pct}%</span>
+          <button
+            onClick={() => onCancelDownload(video)}
+            className="text-ink-faint hover:text-danger transition"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "ready") {
+    return (
+      <div>
+        {label}
+        <div className="text-[12px] text-ink-dim mb-2">
+          Downloaded
+          {video.offline_quality ? ` · ${video.offline_quality}` : ""}
+          {video.offline_size ? ` · ${formatBytes(video.offline_size)}` : ""}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onPlayOffline(video)}
+            className="flex-1 text-[13px] font-medium py-2 rounded-md bg-surface-2 hover:bg-line text-ink transition"
+          >
+            Play offline
+          </button>
+          <button
+            onClick={() => onDeleteOffline(video)}
+            className="text-[12px] px-3 rounded-md border border-line text-ink-faint hover:text-danger transition"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // none / error — offer a resolution picker + Download. Always include the
+  // current choice as a representable option so the select never desyncs.
+  const heightOpts = Array.from(
+    new Set([
+      ...(heights ?? []),
+      ...(choice !== OFFLINE_BEST && choice !== OFFLINE_AUDIO ? [choice] : []),
+    ])
+  ).sort((a, b) => b - a);
+
+  return (
+    <div>
+      {label}
+      {status === "error" && (
+        <div className="text-[11.5px] text-danger/80 mb-1.5">
+          Last download failed — try again.
+        </div>
+      )}
+      <div className="flex gap-2">
+        <select
+          value={choice}
+          onChange={(e) => setChoice(parseInt(e.target.value, 10))}
+          className="flex-1 text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+        >
+          <option value={OFFLINE_BEST}>Best available</option>
+          {heightOpts.map((h) => (
+            <option key={h} value={h}>
+              {h}p
+            </option>
+          ))}
+          <option value={OFFLINE_AUDIO}>Audio only</option>
+        </select>
+        <button
+          onClick={() => onDownload(video, choice)}
+          className="text-[13px] font-medium py-2 px-3 rounded-md bg-accent text-black hover:brightness-110 transition"
+        >
+          Download
+        </button>
+      </div>
+      {heights === null && (
+        <div className="mt-1 text-[11px] text-ink-faint">Loading resolutions…</div>
+      )}
+    </div>
+  );
+}
+
+/// Compact byte-size label (e.g. 124000000 → "118 MB").
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
 }
 
 // ---------------------------------------------------------------------------

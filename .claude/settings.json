@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./node_modules/**)",
+      "Read(./dist/**)",
+      "Read(./src-tauri/target/**)",
+      "Read(./src-tauri/gen/**)",
+      "Read(./src-tauri/binaries/**)",
+      "Read(./src-tauri/icons/**)",
+      "Read(./src-tauri/icons-dev/**)",
+      "Read(./src-tauri/Cargo.lock)",
+      "Read(./package-lock.json)"
+    ]
+  }
+}

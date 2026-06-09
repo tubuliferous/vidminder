@@ -13,10 +13,12 @@ import { Sidebar } from "./components/Sidebar";
 import { VideoCard } from "./components/VideoCard";
 import { VideoDetails } from "./components/VideoDetails";
 import { MultiVideoDetails } from "./components/MultiVideoDetails";
+import { ChannelDetails } from "./components/ChannelDetails";
 import { InboxView } from "./components/InboxView";
 import { InboxRow } from "./components/InboxRow";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SearchPalette } from "./components/SearchPalette";
+import { DownloadQualityMenu } from "./components/DownloadQualityMenu";
 import {
   DRAG_MIME,
   extractUrlFromDrop,
@@ -31,7 +33,7 @@ import { useSettings } from "./settings";
 import { kbd, kbdClick, shiftClick } from "./platform";
 
 type Pending = { id: string; url: string; kind: "video" | "channel" };
-type SortMode = "added" | "uploaded";
+type SortMode = "added" | "uploaded" | "length";
 type Toast = {
   id: number;
   kind: "ok" | "err" | "undo";
@@ -81,6 +83,13 @@ function App() {
   const [resurfacingChannelId, setResurfacingChannelId] = useState<number | null>(null);
   const [bulkDismissingScope, setBulkDismissingScope] = useState<string | null>(null);
   const [settings, updateSettings] = useSettings();
+  // Live download progress (videoId -> percent 0–100) while a download runs.
+  // The resting state (none/ready/error) lives on each Video via the DB.
+  const [downloads, setDownloads] = useState<Map<number, number>>(new Map());
+  // The right-click "choose resolution" menu, anchored at screen coords.
+  const [qualityMenu, setQualityMenu] = useState<
+    { videoId: number; status: string; x: number; y: number } | null
+  >(null);
 
   const dragDepth = useRef(0);
   const toastSeq = useRef(0);
@@ -235,12 +244,90 @@ function App() {
       refreshInbox();
       refreshChannelsList();
     });
+    const ul4 = listen<{
+      id: number;
+      percent: number;
+      status: string;
+      message?: string;
+    }>("download-progress", (e) => {
+      const { id, percent, status, message } = e.payload;
+      setDownloads((m) => {
+        const next = new Map(m);
+        if (status === "downloading") next.set(id, percent);
+        else next.delete(id); // ready / error / none — resting state on the Video
+        return next;
+      });
+      if (status === "error") {
+        pushToast({
+          kind: "err",
+          text: message ? `Download failed: ${message}` : "Download failed",
+        });
+      }
+    });
     return () => {
       ul1.then((f) => f());
       ul2.then((f) => f());
       ul3.then((f) => f());
+      ul4.then((f) => f());
     };
-  }, [refreshVideos, refreshChannelsList, refreshInbox]);
+  }, [refreshVideos, refreshChannelsList, refreshInbox, pushToast]);
+
+  // --- Offline downloads -----------------------------------------------------
+  const handleDownloadVideo = useCallback(
+    (videoId: number, maxHeight: number) => {
+      // Optimistically show the ring immediately; the backend confirms via
+      // download-progress + videos-changed.
+      setDownloads((m) => new Map(m).set(videoId, 0));
+      api.downloadVideo(videoId, maxHeight).catch((e) => {
+        setDownloads((m) => {
+          const next = new Map(m);
+          next.delete(videoId);
+          return next;
+        });
+        pushToast({ kind: "err", text: `Couldn't start download: ${e}` });
+      });
+    },
+    [pushToast]
+  );
+
+  const handleCancelDownload = useCallback((videoId: number) => {
+    api.cancelDownload(videoId).catch(() => {});
+  }, []);
+
+  const handleDeleteOffline = useCallback((videoId: number) => {
+    api.deleteOffline(videoId).catch(() => {});
+  }, []);
+
+  const handlePlayOffline = useCallback(
+    async (video: Video) => {
+      try {
+        const opened = await api.openOffline(video.id);
+        if (!opened) {
+          // The downloaded file was removed outside the app — the backend reset
+          // its status; open the video online instead.
+          api.openVideoInBrowser(video.url);
+        }
+      } catch (e) {
+        pushToast({ kind: "err", text: `Couldn't open file: ${e}` });
+      }
+    },
+    [pushToast]
+  );
+
+  const handleBatchDownload = useCallback(
+    (vids: Video[], maxHeight: number) => {
+      const ids = vids.map((v) => v.id);
+      setDownloads((m) => {
+        const next = new Map(m);
+        for (const id of ids) next.set(id, 0);
+        return next;
+      });
+      api.downloadVideos(ids, maxHeight).catch((e) =>
+        pushToast({ kind: "err", text: `Couldn't start downloads: ${e}` })
+      );
+    },
+    [pushToast]
+  );
 
   // ---------------------------------------------------------------------------
   // Mutations — each records an undo entry
@@ -445,44 +532,6 @@ function App() {
           prev.map((v) => {
             const s = snapshot.find((s) => s.id === v.id);
             return s ? { ...v, favorite: s.prev } : v;
-          })
-        );
-      });
-    },
-    [pushToast, recordUndo]
-  );
-
-  const handleSetFolderMany = useCallback(
-    async (videosArr: Video[], folder: string | null) => {
-      if (videosArr.length === 0) return;
-      const snapshot = videosArr.map((v) => ({ id: v.id, prev: v.folder }));
-      const toUpdate = videosArr.filter((v) => (v.folder ?? null) !== folder);
-      if (toUpdate.length === 0) return;
-      const idSet = new Set(snapshot.map((s) => s.id));
-      setVideos((prev) =>
-        prev.map((v) => (idSet.has(v.id) ? { ...v, folder } : v))
-      );
-      try {
-        await Promise.all(toUpdate.map((v) => api.setFolder(v.id, folder)));
-      } catch (e) {
-        setVideos((prev) =>
-          prev.map((v) => {
-            const s = snapshot.find((s) => s.id === v.id);
-            return s ? { ...v, folder: s.prev } : v;
-          })
-        );
-        pushToast({ kind: "err", text: String(e) });
-        return;
-      }
-      const label = folder
-        ? `Set ${toUpdate.length} to folder “${folder}”`
-        : `Cleared folder on ${toUpdate.length}`;
-      recordUndo(label, async () => {
-        await Promise.all(snapshot.map((s) => api.setFolder(s.id, s.prev)));
-        setVideos((prev) =>
-          prev.map((v) => {
-            const s = snapshot.find((s) => s.id === v.id);
-            return s ? { ...v, folder: s.prev } : v;
           })
         );
       });
@@ -782,6 +831,20 @@ function App() {
     [handleToggleWatched]
   );
 
+  // Double-clicking a card opens the downloaded file if there is one, else the
+  // website. (The details panel keeps a distinct "Play in browser" button.)
+  const handleCardOpen = useCallback(
+    (video: Video) => {
+      if (video.offline_status === "ready" && video.offline_path) {
+        handlePlayOffline(video);
+      } else {
+        api.openVideoInBrowser(video.url);
+      }
+      if (!video.watched) handleToggleWatched(video);
+    },
+    [handlePlayOffline, handleToggleWatched]
+  );
+
   const handleToggleFavorite = useCallback(
     async (video: Video) => {
       const previous = video.favorite;
@@ -804,35 +867,6 @@ function App() {
           await api.setFavorite(video.id, previous);
           setVideos((prev) =>
             prev.map((v) => (v.id === video.id ? { ...v, favorite: previous } : v))
-          );
-        }
-      );
-    },
-    [pushToast, recordUndo]
-  );
-
-  const handleSetFolder = useCallback(
-    async (video: Video, folder: string | null) => {
-      const previous = video.folder;
-      if (previous === folder) return;
-      setVideos((prev) =>
-        prev.map((v) => (v.id === video.id ? { ...v, folder } : v))
-      );
-      try {
-        await api.setFolder(video.id, folder);
-      } catch (e) {
-        setVideos((prev) =>
-          prev.map((v) => (v.id === video.id ? { ...v, folder: previous } : v))
-        );
-        pushToast({ kind: "err", text: `Couldn't set folder: ${e}` });
-        return;
-      }
-      recordUndo(
-        folder ? `Set folder to “${folder}”` : "Cleared folder",
-        async () => {
-          await api.setFolder(video.id, previous);
-          setVideos((prev) =>
-            prev.map((v) => (v.id === video.id ? { ...v, folder: previous } : v))
           );
         }
       );
@@ -1313,14 +1347,33 @@ function App() {
         e.preventDefault();
         clearSelection();
       }
+
+      // Enter on a single selected video opens it on YouTube.
+      if (
+        e.key === "Enter" &&
+        !inField &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !settingsOpen &&
+        !searchOpen &&
+        selectedVideo
+      ) {
+        e.preventDefault();
+        handleOpenAndMarkWatched(selectedVideo);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     clearSelection,
     handleDeleteVideos,
+    handleOpenAndMarkWatched,
     selectedIds,
+    selectedVideo,
     selectedVideos,
+    settingsOpen,
+    searchOpen,
     undoLast,
   ]);
 
@@ -1345,6 +1398,9 @@ function App() {
         case "unwatched":
           if (v.watched) return false;
           break;
+        case "downloaded":
+          if (v.offline_status !== "ready") return false;
+          break;
         case "tag": {
           // Inclusive (Calibre-style): selecting "science" matches videos
           // tagged "science" or any descendant ("science.biology", etc.).
@@ -1357,9 +1413,6 @@ function App() {
           if (!hit) return false;
           break;
         }
-        case "folder":
-          if (v.folder !== filter.name) return false;
-          break;
         case "category":
           if (v.category !== filter.name) return false;
           break;
@@ -1379,7 +1432,6 @@ function App() {
         v.uploader ?? "",
         v.description ?? "",
         v.category ?? "",
-        v.folder ?? "",
         v.user_tags.join(" "),
         v.raw_tags.join(" "),
       ]
@@ -1397,17 +1449,14 @@ function App() {
         : 0;
     if (sortMode === "uploaded") {
       matched.sort((a, b) => uploadKey(b) - uploadKey(a) || b.added_at - a.added_at);
+    } else if (sortMode === "length") {
+      // Longest first; videos with no known duration sink to the bottom.
+      matched.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || b.added_at - a.added_at);
     } else {
       matched.sort((a, b) => b.added_at - a.added_at);
     }
     return matched;
   }, [videos, channels, filter, search, sortMode]);
-
-  const knownFolders = useMemo(() => {
-    const s = new Set<string>();
-    for (const v of videos) if (v.folder) s.add(v.folder);
-    return [...s].sort((a, b) => a.localeCompare(b));
-  }, [videos]);
 
   // Every distinct full dotted tag currently in use. Powers the tag editor's
   // nesting-aware autocomplete (Calibre-style).
@@ -1486,6 +1535,38 @@ function App() {
     if (filter.kind !== "channel") return null;
     return channels.find((c) => c.id === filter.channelId) ?? null;
   }, [channels, filter]);
+
+  // How many library videos belong to the currently-viewed channel (same match
+  // as the "channel" filter: by url, external id, or uploader name).
+  const currentChannelLibraryCount = useMemo(() => {
+    const ch = currentChannel;
+    if (!ch) return 0;
+    return videos.filter((v) => {
+      const sameUrl = v.channel_url && v.channel_url === ch.url;
+      const sameId = v.channel_id && ch.channel_id && v.channel_id === ch.channel_id;
+      const sameName = !!v.uploader && v.uploader === ch.name;
+      return sameUrl || sameId || sameName;
+    }).length;
+  }, [currentChannel, videos]);
+
+  const handleSetChannelCategory = useCallback(
+    async (channelId: number, category: string | null) => {
+      const before = channels.find((c) => c.id === channelId)?.category ?? null;
+      if (before === category) return;
+      try {
+        await api.setChannelCategory(channelId, category);
+      } catch (e) {
+        pushToast({ kind: "err", text: `Couldn't update category: ${e}` });
+        return;
+      }
+      setChannels((prev) =>
+        prev
+          .map((c) => (c.id === channelId ? { ...c, category } : c))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    },
+    [channels, pushToast]
+  );
 
   // ---------------------------------------------------------------------------
   // Top-of-app handlers
@@ -1638,10 +1719,6 @@ function App() {
           refreshing={refreshing}
           onFollowClick={() => setFollowOpen((x) => !x)}
           draggingVideo={draggingVideo}
-          onDropToFolder={(id, folder) => {
-            const v = videos.find((x) => x.id === id);
-            if (v) handleSetFolder(v, folder);
-          }}
           onDropToTag={(id, tag) => {
             const v = videos.find((x) => x.id === id);
             if (v) handleAddTag(v, tag);
@@ -1719,6 +1796,7 @@ function App() {
                 >
                   <option value="added">Date added</option>
                   <option value="uploaded">Upload date</option>
+                  <option value="length">Length</option>
                 </select>
               </label>
             )}
@@ -1982,9 +2060,23 @@ function App() {
                               onMouseEnterRow={(e) =>
                                 handleVideoMouseEnter(v, e, filtered.map((x) => x.id))
                               }
-                              onOpen={() => handleOpenAndMarkWatched(v)}
+                              onOpen={() => handleCardOpen(v)}
                               onToggleFavorite={() => handleToggleFavorite(v)}
                               onDragStateChange={setDraggingVideo}
+                              offlinePercent={downloads.get(v.id)}
+                              onDownloadDefault={() =>
+                                handleDownloadVideo(v.id, settings.offlineMaxHeight)
+                              }
+                              onCancelDownload={() => handleCancelDownload(v.id)}
+                              onPlayOffline={() => handlePlayOffline(v)}
+                              onRequestQualityMenu={(x, y) =>
+                                setQualityMenu({
+                                  videoId: v.id,
+                                  status: v.offline_status,
+                                  x,
+                                  y,
+                                })
+                              }
                             />
                           </li>
                         ))}
@@ -2018,9 +2110,23 @@ function App() {
                         onMouseEnterRow={(e) =>
                           handleVideoMouseEnter(v, e, filtered.map((x) => x.id))
                         }
-                        onOpen={() => handleOpenAndMarkWatched(v)}
+                        onOpen={() => handleCardOpen(v)}
                         onToggleFavorite={() => handleToggleFavorite(v)}
                         onDragStateChange={setDraggingVideo}
+                        offlinePercent={downloads.get(v.id)}
+                        onDownloadDefault={() =>
+                          handleDownloadVideo(v.id, settings.offlineMaxHeight)
+                        }
+                        onCancelDownload={() => handleCancelDownload(v.id)}
+                        onPlayOffline={() => handlePlayOffline(v)}
+                        onRequestQualityMenu={(x, y) =>
+                          setQualityMenu({
+                            videoId: v.id,
+                            status: v.offline_status,
+                            x,
+                            y,
+                          })
+                        }
                       />
                     </li>
                   ))}
@@ -2034,31 +2140,49 @@ function App() {
                   <div className="w-full">
                     <MultiVideoDetails
                       videos={selectedVideos}
-                      knownFolders={knownFolders}
                       allTags={allKnownTags}
                       onSetWatched={handleSetWatchedMany}
                       onSetFavorite={handleSetFavoriteMany}
-                      onSetFolder={handleSetFolderMany}
                       onAddTag={handleAddTagMany}
                       onRemoveTag={handleRemoveTagMany}
                       onDeleteAll={handleDeleteVideos}
                       onClearSelection={clearSelection}
+                      defaultMaxHeight={settings.offlineMaxHeight}
+                      onBatchDownload={handleBatchDownload}
                     />
                   </div>
                 ) : selectedVideo ? (
                   <div className="w-full">
                     <VideoDetails
                       video={selectedVideo}
-                      knownFolders={knownFolders}
                       followedChannels={channels}
                       allTags={allKnownTags}
                       onSetTags={handleSetTags}
-                      onSetFolder={handleSetFolder}
                       onToggleWatched={handleToggleWatched}
                       onToggleFavorite={handleToggleFavorite}
                       onOpen={handleOpenAndMarkWatched}
                       onRequestDelete={() => handleDeleteVideo(selectedVideo)}
                       onFollowChannel={handleFollowChannelFromVideo}
+                      offlinePercent={downloads.get(selectedVideo.id)}
+                      defaultMaxHeight={settings.offlineMaxHeight}
+                      onDownload={(v, h) => handleDownloadVideo(v.id, h)}
+                      onCancelDownload={(v) => handleCancelDownload(v.id)}
+                      onPlayOffline={handlePlayOffline}
+                      onDeleteOffline={(v) => handleDeleteOffline(v.id)}
+                    />
+                  </div>
+                ) : filter.kind === "channel" && currentChannel ? (
+                  <div className="w-full">
+                    <ChannelDetails
+                      channel={currentChannel}
+                      libraryCount={currentChannelLibraryCount}
+                      catchingUp={resurfacingChannelId === currentChannel.id}
+                      onOpenOnYouTube={() => api.openInBrowser(currentChannel.url)}
+                      onCatchUp={() => handleResurfaceChannel(currentChannel.id)}
+                      onUnfollow={() => handleUnfollow(currentChannel.id)}
+                      onSetCategory={(cat) =>
+                        handleSetChannelCategory(currentChannel.id, cat)
+                      }
                     />
                   </div>
                 ) : (
@@ -2083,6 +2207,22 @@ function App() {
         </div>
       )}
 
+      {qualityMenu && (
+        <DownloadQualityMenu
+          x={qualityMenu.x}
+          y={qualityMenu.y}
+          videoId={qualityMenu.videoId}
+          status={qualityMenu.status}
+          onPick={(h) => handleDownloadVideo(qualityMenu.videoId, h)}
+          onClear={() => {
+            if (qualityMenu.status === "downloading")
+              handleCancelDownload(qualityMenu.videoId);
+            else handleDeleteOffline(qualityMenu.videoId);
+          }}
+          onClose={() => setQualityMenu(null)}
+        />
+      )}
+
       <SettingsDialog
         open={settingsOpen}
         settings={settings}
@@ -2099,7 +2239,7 @@ function App() {
           setSearch("");
           if (pick.kind === "library") {
             // Library hit: route to All Videos so the row is guaranteed visible
-            // regardless of the user's current filter (tag, folder, channel,
+            // regardless of the user's current filter (tag, channel,
             // favorites, etc.). Then select + scroll.
             if (filter.kind !== "all") setFilter({ kind: "all" });
             selectSingle(pick.video.id);
@@ -2249,6 +2389,15 @@ function EmptyState({
     );
   }
 
+  if (filter.kind === "downloaded") {
+    return (
+      <CenteredEmpty
+        title="Nothing downloaded yet"
+        body="Hover a video and tap the download button on its thumbnail (or right-click it to pick a resolution). Downloaded videos for offline viewing show up here."
+      />
+    );
+  }
+
   if (filter.kind === "tag") {
     return (
       <CenteredEmpty
@@ -2257,20 +2406,6 @@ function EmptyState({
           q
             ? `Nothing tagged #${filter.name} matches “${q}”.`
             : `Add #${filter.name} to a video from its details panel to see it here.`
-        }
-        action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
-      />
-    );
-  }
-
-  if (filter.kind === "folder") {
-    return (
-      <CenteredEmpty
-        title={`Folder “${filter.name}” is empty`}
-        body={
-          q
-            ? `Nothing in this folder matches “${q}”.`
-            : `Assign a video to this folder from its details panel to see it here.`
         }
         action={q ? { label: "Clear search", onClick: onClearSearch } : undefined}
       />

@@ -11,13 +11,19 @@ export type Video = {
   upload_date: string | null;
   category: string | null;
   raw_tags: string[];
-  folder: string | null;
   user_tags: string[];
   watched: boolean;
   favorite: boolean;
   added_at: number;
   channel_url: string | null;
   channel_id: string | null;
+  /// Offline-download state. `offline_status` is "none" | "downloading" |
+  /// "ready" | "error"; the rest are populated only when status is "ready".
+  offline_status: string;
+  offline_path: string | null;
+  offline_quality: string | null;
+  offline_size: number | null;
+  offline_downloaded_at: number | null;
 };
 
 export type Channel = {
@@ -28,6 +34,8 @@ export type Channel = {
   name: string;
   thumbnail_url: string | null;
   category: string | null;
+  description: string | null;
+  subscriber_count: number | null;
   followed_at: number;
   last_checked_at: number | null;
   inbox_count: number;
@@ -80,7 +88,7 @@ export type Filter =
   | { kind: "favorites" }
   | { kind: "unwatched" }
   | { kind: "watched" }
+  | { kind: "downloaded" }
   | { kind: "tag"; name: string }
-  | { kind: "folder"; name: string }
   | { kind: "category"; name: string }
   | { kind: "channel"; channelId: number };
