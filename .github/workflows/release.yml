@@ -24,7 +24,9 @@ jobs:
             sidecar_name: "yt-dlp-x86_64-pc-windows-msvc.exe"
             sidecar_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
             ffmpeg_name: "ffmpeg-x86_64-pc-windows-msvc.exe"
-            ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-win32-x64.exe"
+            # The ffmpeg-static asset has no .exe suffix; we save it as .exe so
+            # Tauri's externalBin resolves ffmpeg.exe next to the binary.
+            ffmpeg_url: "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffmpeg-win32-x64"
           - name: "macOS (Apple Silicon)"
             runner: "macos-latest"
             target: "aarch64-apple-darwin"

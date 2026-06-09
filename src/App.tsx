@@ -19,6 +19,7 @@ import { InboxRow } from "./components/InboxRow";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SearchPalette } from "./components/SearchPalette";
 import { DownloadQualityMenu } from "./components/DownloadQualityMenu";
+import { ContextMenu, type MenuItem } from "./components/ContextMenu";
 import {
   DRAG_MIME,
   extractUrlFromDrop,
@@ -28,8 +29,9 @@ import {
   RECENCY_LABELS,
   RECENCY_ORDER,
   uid,
+  copyText,
 } from "./utils";
-import { useSettings } from "./settings";
+import { offlineQualityLabel, useSettings } from "./settings";
 import { kbd, kbdClick, shiftClick } from "./platform";
 
 type Pending = { id: string; url: string; kind: "video" | "channel" };
@@ -89,6 +91,10 @@ function App() {
   // The right-click "choose resolution" menu, anchored at screen coords.
   const [qualityMenu, setQualityMenu] = useState<
     { videoId: number; status: string; x: number; y: number } | null
+  >(null);
+  // The right-click context menu for a video card.
+  const [cardMenu, setCardMenu] = useState<
+    { video: Video; x: number; y: number } | null
   >(null);
 
   const dragDepth = useRef(0);
@@ -328,6 +334,24 @@ function App() {
     },
     [pushToast]
   );
+
+  // Suppress the WebView's default right-click menu (Reload / Inspect / Back …)
+  // everywhere except inside editable fields, where cut/copy/paste is useful.
+  // Our own onContextMenu handlers stopPropagation, so the custom menus below
+  // still open; bare elements just get no native menu.
+  useEffect(() => {
+    const onContext = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      const editable =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable);
+      if (!editable) e.preventDefault();
+    };
+    document.addEventListener("contextmenu", onContext);
+    return () => document.removeEventListener("contextmenu", onContext);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Mutations — each records an undo entry
@@ -872,6 +896,72 @@ function App() {
       );
     },
     [pushToast, recordUndo]
+  );
+
+  // Build the right-click menu for a video card from the in-app actions.
+  const videoMenuItems = useCallback(
+    (video: Video): MenuItem[] => {
+      const status = video.offline_status;
+      const items: MenuItem[] = [
+        { label: "Open on YouTube", onClick: () => handleOpenAndMarkWatched(video) },
+      ];
+      if (status === "ready") {
+        items.push({ label: "Play downloaded file", onClick: () => handlePlayOffline(video) });
+      }
+      items.push({ kind: "separator" });
+      if (status === "ready") {
+        items.push({ label: "Remove download", onClick: () => handleDeleteOffline(video.id) });
+      } else if (status === "downloading") {
+        items.push({ label: "Cancel download", onClick: () => handleCancelDownload(video.id) });
+      } else {
+        items.push({
+          label: `Download (${offlineQualityLabel(settings.offlineMaxHeight)})`,
+          onClick: () => handleDownloadVideo(video.id, settings.offlineMaxHeight),
+        });
+      }
+      items.push(
+        { kind: "separator" },
+        {
+          label: video.favorite ? "Remove from favorites" : "Add to favorites",
+          onClick: () => handleToggleFavorite(video),
+        },
+        {
+          label: video.watched ? "Mark unwatched" : "Mark watched",
+          onClick: () => handleToggleWatched(video),
+        },
+        { kind: "separator" },
+        {
+          label: "Copy video link",
+          onClick: () => {
+            copyText(video.url);
+            pushToast({ kind: "ok", text: "Link copied" });
+          },
+        }
+      );
+      if (video.channel_url) {
+        items.push({
+          label: `Open ${video.uploader ?? "channel"} on YouTube`,
+          onClick: () => api.openInBrowser(video.channel_url!),
+        });
+      }
+      items.push(
+        { kind: "separator" },
+        { label: "Remove from library", danger: true, onClick: () => handleDeleteVideo(video) }
+      );
+      return items;
+    },
+    [
+      settings.offlineMaxHeight,
+      handleOpenAndMarkWatched,
+      handlePlayOffline,
+      handleDeleteOffline,
+      handleCancelDownload,
+      handleDownloadVideo,
+      handleToggleFavorite,
+      handleToggleWatched,
+      handleDeleteVideo,
+      pushToast,
+    ]
   );
 
   const handleAddTag = useCallback(
@@ -2077,6 +2167,9 @@ function App() {
                                   y,
                                 })
                               }
+                              onRequestContextMenu={(x, y) =>
+                                setCardMenu({ video: v, x, y })
+                              }
                             />
                           </li>
                         ))}
@@ -2126,6 +2219,9 @@ function App() {
                             x,
                             y,
                           })
+                        }
+                        onRequestContextMenu={(x, y) =>
+                          setCardMenu({ video: v, x, y })
                         }
                       />
                     </li>
@@ -2220,6 +2316,15 @@ function App() {
             else handleDeleteOffline(qualityMenu.videoId);
           }}
           onClose={() => setQualityMenu(null)}
+        />
+      )}
+
+      {cardMenu && (
+        <ContextMenu
+          x={cardMenu.x}
+          y={cardMenu.y}
+          items={videoMenuItems(cardMenu.video)}
+          onClose={() => setCardMenu(null)}
         />
       )}
 

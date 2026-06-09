@@ -267,3 +267,28 @@ export function extractUrlFromDrop(e: React.DragEvent | DragEvent): string | nul
   }
   return null;
 }
+
+/// Copy text to the clipboard, with a fallback for old WebKit / non-secure
+/// contexts where navigator.clipboard is unavailable.
+export async function copyText(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    /* fall through to the execCommand path */
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } catch {
+    /* best effort */
+  }
+  document.body.removeChild(ta);
+}

@@ -26,6 +26,8 @@ type Props = {
   onPlayOffline: () => void;
   /// Open the right-click resolution menu at the given screen coords.
   onRequestQualityMenu: (x: number, y: number) => void;
+  /// Open the card's in-app context menu at the given screen coords.
+  onRequestContextMenu: (x: number, y: number) => void;
 };
 
 export function VideoCard({
@@ -42,6 +44,7 @@ export function VideoCard({
   onCancelDownload,
   onPlayOffline,
   onRequestQualityMenu,
+  onRequestContextMenu,
 }: Props) {
   const duration = formatDuration(video.duration);
   return (
@@ -59,6 +62,11 @@ export function VideoCard({
       onMouseDown={onMouseDownRow}
       onMouseEnter={onMouseEnterRow}
       onDoubleClick={onOpen}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onRequestContextMenu(e.clientX, e.clientY);
+      }}
       className={
         "group flex gap-3 px-3 py-2.5 cursor-pointer border-l-2 transition-colors " +
         (selected

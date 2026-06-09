@@ -43,7 +43,7 @@ function ytDlpUrl() {
 const FFMPEG_STATIC_TAG = "b6.0";
 function ffmpegUrl() {
   const base = `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_TAG}`;
-  if (p === "win32") return `${base}/ffmpeg-win32-x64.exe`;
+  if (p === "win32") return `${base}/ffmpeg-win32-x64`;
   if (p === "darwin") return `${base}/ffmpeg-darwin-${a === "arm64" ? "arm64" : "x64"}`;
   return `${base}/ffmpeg-linux-x64`;
 }
