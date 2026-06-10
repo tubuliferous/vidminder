@@ -19,6 +19,11 @@ export type Settings = {
   /// always fetched in the background; this only governs their visibility.
   /// Off by default.
   showShorts: boolean;
+  /// In a channel view, whether videos already in your library are pulled out
+  /// into their own "In your list" section instead of being intercalated
+  /// (badged) into the chronological upload list. Off by default — added
+  /// videos sort inline with everything else.
+  separateAddedInChannels: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -28,6 +33,7 @@ const DEFAULTS: Settings = {
   channelLookbackDays: 14,
   offlineMaxHeight: 720,
   showShorts: false,
+  separateAddedInChannels: false,
 };
 
 export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [

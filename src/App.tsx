@@ -1709,13 +1709,49 @@ function App() {
     });
   }, [visibleInboxItems, search]);
 
+  // The per-channel feed list. Built straight from `inbox` (not from the
+  // global `searchedInboxItems`, which always drops in-library videos) so we
+  // can intercalate already-added uploads when the "separate" preference is
+  // off. Each in-library row carries its `in_library` flag for the badge.
   const channelInboxItems = useMemo(() => {
     if (filter.kind !== "channel") return [];
-    const items = searchedInboxItems.filter(
-      (cv) => cv.channel_id === filter.channelId
-    );
+    const q = search.trim().toLowerCase();
+    const items = inbox.filter((cv) => {
+      if (cv.channel_id !== filter.channelId) return false;
+      if (cv.dismissed) return false;
+      if (!settings.showShorts && cv.is_short) return false;
+      // Added videos are intercalated by default; the preference pulls them
+      // back out into the separate "In your list" section below.
+      if (settings.separateAddedInChannels && cv.in_library) return false;
+      if (q) {
+        const hay = [cv.title, cv.channel_name, cv.upload_date ?? ""]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
     return sortChannelVideos(items, effectiveSortMode, sortDir);
-  }, [filter, searchedInboxItems, effectiveSortMode, sortDir]);
+  }, [
+    filter,
+    inbox,
+    search,
+    settings.showShorts,
+    settings.separateAddedInChannels,
+    effectiveSortMode,
+    sortDir,
+  ]);
+
+  // Library videos to show in the standalone "In your list" section of a
+  // channel view. When intercalating (default), only videos with no channel
+  // feed row remain here (everything else is already shown, badged, above);
+  // when separating, the section holds every added video for the channel.
+  const channelLibraryExtras = useMemo(() => {
+    if (filter.kind !== "channel") return filtered;
+    if (settings.separateAddedInChannels) return filtered;
+    const shown = new Set(channelInboxItems.map((cv) => cv.url));
+    return filtered.filter((v) => !shown.has(v.url));
+  }, [filter, filtered, channelInboxItems, settings.separateAddedInChannels]);
 
   const channelInboxGrouped = useMemo(() => {
     if (channelInboxItems.length === 0)
@@ -2264,7 +2300,7 @@ function App() {
                   onDragStateChange={setDraggingVideo}
                 />
               ) : filter.kind === "channel" &&
-                (filtered.length > 0 || channelInboxItems.length > 0) ? (
+                (channelLibraryExtras.length > 0 || channelInboxItems.length > 0) ? (
                 <div>
                   {channelInboxGrouped.map(({ label, items }) => (
                     <section key={"inbox-" + label} className="mb-4">
@@ -2278,7 +2314,9 @@ function App() {
                           </span>
                         </div>
                         <span className="text-[11px] text-ink-faint hidden sm:block">
-                          New from this channel
+                          {settings.separateAddedInChannels
+                            ? "New from this channel"
+                            : "Uploads from this channel"}
                         </span>
                       </div>
                       <div className="px-5 pt-3 space-y-2">
@@ -2301,7 +2339,7 @@ function App() {
                       </div>
                     </section>
                   ))}
-                  {filtered.length > 0 && (
+                  {channelLibraryExtras.length > 0 && (
                     <section className="mb-4">
                       <div className="sticky top-0 z-[5] bg-canvas/95 backdrop-blur px-5 py-2 flex items-baseline justify-between border-b border-line/60">
                         <div className="flex items-baseline gap-3">
@@ -2309,24 +2347,24 @@ function App() {
                             In your list
                           </h3>
                           <span className="text-[11px] text-ink-faint tabular-nums">
-                            {filtered.length}
+                            {channelLibraryExtras.length}
                           </span>
                         </div>
                       </div>
                       <ul className="py-1">
-                        {filtered.map((v) => (
+                        {channelLibraryExtras.map((v) => (
                           <li key={v.id} id={`video-row-${v.id}`}>
                             <VideoCard
                               video={v}
                               selected={selectedIds.has(v.id)}
                               onSelect={(e) =>
-                                handleVideoSelect(v, e, filtered.map((x) => x.id))
+                                handleVideoSelect(v, e, channelLibraryExtras.map((x) => x.id))
                               }
                               onMouseDownRow={(e) =>
-                                handleVideoMouseDown(v, e, filtered.map((x) => x.id))
+                                handleVideoMouseDown(v, e, channelLibraryExtras.map((x) => x.id))
                               }
                               onMouseEnterRow={(e) =>
-                                handleVideoMouseEnter(v, e, filtered.map((x) => x.id))
+                                handleVideoMouseEnter(v, e, channelLibraryExtras.map((x) => x.id))
                               }
                               onOpen={() => handleCardOpen(v)}
                               onToggleFavorite={() => handleToggleFavorite(v)}

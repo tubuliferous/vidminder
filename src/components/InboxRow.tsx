@@ -27,8 +27,9 @@ export function InboxRow({
     recencyBucket(cv.upload_date, cv.first_seen_at, cv.upload_timestamp) !==
     "older";
   // Only items that are both recent and unviewed contribute to the inbox count
-  // badge, so that's the same filter for the NEW pill.
-  const showNewBadge = isUnseen && isFresh;
+  // badge, so that's the same filter for the NEW pill. Already-added videos
+  // carry the "In list" badge instead, so they never show "New".
+  const showNewBadge = isUnseen && isFresh && !cv.in_library;
   return (
     <div
       draggable
@@ -46,7 +47,9 @@ export function InboxRow({
       title="Double-click anywhere to play in browser · drag onto a tag to add it there"
       className={
         "flex gap-3 p-2.5 rounded-md border transition group cursor-pointer " +
-        (showNewBadge
+        (cv.in_library
+          ? "bg-surface/40 border-line/40 border-l-2 border-l-accent/60 hover:border-line-soft"
+          : showNewBadge
           ? "bg-surface border-line hover:border-line-soft"
           : "bg-surface/60 border-line/50 hover:border-line-soft")
       }
@@ -54,11 +57,15 @@ export function InboxRow({
       <div
         className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-surface-2"
       >
-        {showNewBadge && (
+        {cv.in_library ? (
+          <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.06em] uppercase px-1.5 py-[1px] rounded bg-accent/90 text-black shadow-sm inline-flex items-center gap-0.5">
+            <span aria-hidden>✓</span> In list
+          </span>
+        ) : showNewBadge ? (
           <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.08em] uppercase px-1.5 py-[1px] rounded bg-accent text-black shadow-sm">
             New
           </span>
-        )}
+        ) : null}
         {cv.thumbnail_url ? (
           <img
             src={cv.thumbnail_url}
@@ -113,20 +120,28 @@ export function InboxRow({
           className="mt-auto pt-2 flex items-center gap-2"
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          <button
-            onClick={onAdd}
-            disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-md bg-accent text-black hover:brightness-110 disabled:opacity-50 transition"
-          >
-            {busy ? "Adding…" : "+ Add to list"}
-          </button>
-          <button
-            onClick={onDismiss}
-            disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 transition"
-          >
-            Dismiss
-          </button>
+          {cv.in_library ? (
+            <span className="text-[12px] px-2.5 py-1 rounded-md inline-flex items-center gap-1 text-accent font-medium">
+              <span aria-hidden>✓</span> In your list
+            </span>
+          ) : (
+            <>
+              <button
+                onClick={onAdd}
+                disabled={busy}
+                className="text-[12px] px-2.5 py-1 rounded-md bg-accent text-black hover:brightness-110 disabled:opacity-50 transition"
+              >
+                {busy ? "Adding…" : "+ Add to list"}
+              </button>
+              <button
+                onClick={onDismiss}
+                disabled={busy}
+                className="text-[12px] px-2.5 py-1 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 transition"
+              >
+                Dismiss
+              </button>
+            </>
+          )}
           <button
             onClick={onOpen}
             className="text-[11.5px] text-ink-faint hover:text-ink-dim ml-1 transition"

@@ -208,6 +208,28 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
               </span>
             </span>
           </label>
+
+          <label className="flex items-start gap-3 cursor-pointer mt-3">
+            <input
+              type="checkbox"
+              checked={settings.separateAddedInChannels}
+              onChange={(e) =>
+                onChange({ separateAddedInChannels: e.target.checked })
+              }
+              className="mt-0.5 w-4 h-4 accent-accent"
+            />
+            <span>
+              <span className="text-[13px] block">
+                Separate already-added videos in channels
+              </span>
+              <span className="text-[11.5px] text-ink-faint">
+                By default a channel's videos already in your library are
+                intercalated into the upload list with an “In list” badge. Turn
+                this on to pull them into their own “In your list” section
+                instead.
+              </span>
+            </span>
+          </label>
         </section>
 
         <section className="mt-6 pt-5 border-t border-line text-[11.5px] text-ink-faint leading-relaxed">
