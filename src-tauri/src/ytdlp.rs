@@ -516,8 +516,10 @@ pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<Ytdl
         "--no-warnings",
         "--no-playlist",
         "--skip-download",
-        "--no-check-formats", // don't verify each format is accessible — avoids
-                              // "Requested format not available" on metadata fetch
+        // Maximally permissive selector so format selection never fails on a
+        // metadata-only fetch. Preference order: best combined progressive →
+        // best video → best audio → literally anything.
+        "--format", "b/bv*/ba/best",
         "--socket-timeout",
         "15",
     ]);
