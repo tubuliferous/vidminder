@@ -1,5 +1,11 @@
 import type { ChannelVideo } from "../types";
-import { formatDuration, formatUploadDate, recencyBucket } from "../utils";
+import {
+  formatDuration,
+  formatUploadDate,
+  INBOX_DRAG_MIME,
+  recencyBucket,
+} from "../utils";
+import { cachedRowDragImage, ensureRowDragImage } from "../dragImage";
 import * as api from "../api";
 
 type Props = {
@@ -30,14 +36,47 @@ export function InboxRow({
   // badge, so that's the same filter for the NEW pill. Already-added videos
   // carry the "In list" badge instead, so they never show "New".
   const showNewBadge = isUnseen && isFresh && !cv.in_library;
+  const dragKey = `cv${cv.id}`;
+  const dragLook = {
+    title: cv.title,
+    subtitle: cv.channel_name,
+    thumbnailUrl: cv.thumbnail_url,
+  };
   return (
     <div
       draggable
+      onMouseDown={() => {
+        // Clear any stray selection BEFORE WebKit builds the drag store (it
+        // decides what's being dragged at mousedown, before dragstart fires).
+        window.getSelection()?.removeAllRanges();
+      }}
+      onMouseEnter={() => {
+        // Pre-render the drag image so it's ready synchronously at dragstart.
+        ensureRowDragImage(dragKey, dragLook);
+      }}
       onDragStart={(e) => {
+        // A stray text selection makes WebKit composite the entire selection
+        // into the drag snapshot (a ghost of other rows' text). Clear it and
+        // use our pre-rendered row card — same look as every other row drag.
+        window.getSelection()?.removeAllRanges();
+        const cached = cachedRowDragImage(dragKey);
+        if (cached) {
+          e.dataTransfer.setDragImage(cached.img, 24, 38);
+        } else {
+          const rect = e.currentTarget.getBoundingClientRect();
+          e.dataTransfer.setDragImage(
+            e.currentTarget,
+            e.clientX - rect.left,
+            e.clientY - rect.top
+          );
+        }
         // Carry the watch URL so dropping onto a tag folder (or anywhere in the
         // window) adds the video to the library — the sidebar's URL-drop path
-        // and the global drop-to-add handler both read it.
+        // and the global drop-to-add handler both read it. The marker MIME
+        // tells the global handler this is a row drag (allow the drop, but
+        // don't show the external-URL overlay).
         e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(INBOX_DRAG_MIME, "1");
         e.dataTransfer.setData("text/uri-list", cv.url);
         e.dataTransfer.setData("text/plain", cv.url);
         onDragStateChange?.(true);
@@ -46,7 +85,7 @@ export function InboxRow({
       onDoubleClick={onOpen}
       title="Double-click anywhere to play in browser · drag onto a tag to add it there"
       className={
-        "flex gap-3 p-2.5 rounded-md border transition group cursor-pointer " +
+        "flex gap-3 p-2.5 rounded-md border transition group cursor-pointer select-none " +
         (cv.in_library
           ? "bg-surface/40 border-line/40 border-l-2 border-l-accent/60 hover:border-line-soft"
           : showNewBadge

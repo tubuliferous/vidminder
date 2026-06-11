@@ -62,6 +62,7 @@ export function VideoDetails({
             src={video.thumbnail_url}
             alt=""
             referrerPolicy="no-referrer"
+            draggable={false}
             className="w-full h-full object-cover"
           />
         ) : (

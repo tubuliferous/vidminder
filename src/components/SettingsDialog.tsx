@@ -12,6 +12,8 @@ type Props = {
   settings: Settings;
   onChange: (next: Partial<Settings>) => void;
   onClose: () => void;
+  /// Open the About dialog (instructions + shortcut guide).
+  onOpenAbout?: () => void;
 };
 
 const THEMES: { key: Theme; label: string; hint: string }[] = [
@@ -20,7 +22,13 @@ const THEMES: { key: Theme; label: string; hint: string }[] = [
   { key: "auto", label: "Auto", hint: "Follow system" },
 ];
 
-export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
+export function SettingsDialog({
+  open,
+  settings,
+  onChange,
+  onClose,
+  onOpenAbout,
+}: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -239,8 +247,17 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
             <li>Drop a channel URL (<code className="text-ink-dim">youtube.com/@channel</code>) to follow it.</li>
             <li>Drag videos onto a tag or Favorites in the sidebar.</li>
             <li>Enter opens the selected video on YouTube · double-click plays the download if there is one.</li>
+            <li>{kbd("A")} selects every row in the current view.</li>
             <li>{kbd("Z")} undoes any change · Delete removes the highlighted video · {kbd("Delete")} deletes the selected tag folder.</li>
           </ul>
+          {onOpenAbout && (
+            <button
+              onClick={onOpenAbout}
+              className="mt-3 text-[11.5px] text-ink-faint hover:text-ink underline underline-offset-2 transition"
+            >
+              About VidMinder — instructions &amp; full shortcut guide
+            </button>
+          )}
         </section>
         </div>
       </div>

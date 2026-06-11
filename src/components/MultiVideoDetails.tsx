@@ -18,6 +18,9 @@ type Props = {
   defaultMaxHeight: number;
   /// Download the given videos, each capped at `maxHeight`.
   onBatchDownload: (videos: Video[], maxHeight: number) => void;
+  /// Remove the offline downloads (and cancel in-flight ones) for the given
+  /// videos. The videos themselves stay in the library.
+  onBatchRemoveDownloads: (videos: Video[]) => void;
 };
 
 export function MultiVideoDetails({
@@ -31,6 +34,7 @@ export function MultiVideoDetails({
   onClearSelection,
   defaultMaxHeight,
   onBatchDownload,
+  onBatchRemoveDownloads,
 }: Props) {
   const n = videos.length;
   const [tagInput, setTagInput] = useState("");
@@ -43,6 +47,9 @@ export function MultiVideoDetails({
   const downloadable = videos.filter(
     (v) => v.offline_status !== "ready" && v.offline_status !== "downloading"
   );
+  // Anything with offline state to clear: a finished file, an in-flight
+  // download (cancelled), or a stuck error state.
+  const removableDownloads = videos.filter((v) => v.offline_status !== "none");
 
   // Derive group-level state for the buttons.
   const watchedAll = videos.every((v) => v.watched);
@@ -225,6 +232,26 @@ export function MultiVideoDetails({
               Download {downloadable.length}
             </button>
           </div>
+          {removableDownloads.length > 0 && (
+            <button
+              onClick={() => {
+                const k = removableDownloads.length;
+                if (
+                  !confirm(
+                    `Remove ${k} downloaded ${k === 1 ? "file" : "files"}? The ${
+                      k === 1 ? "video stays" : "videos stay"
+                    } in your library.`
+                  )
+                )
+                  return;
+                onBatchRemoveDownloads(removableDownloads);
+              }}
+              className="mt-2 text-[12px] text-ink-faint hover:text-danger transition"
+            >
+              Remove {removableDownloads.length}{" "}
+              {removableDownloads.length === 1 ? "download" : "downloads"}
+            </button>
+          )}
         </div>
 
         <div>

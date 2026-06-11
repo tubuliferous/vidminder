@@ -125,6 +125,38 @@ export async function openOffline(videoId: number): Promise<boolean> {
   return await invoke<boolean>("open_offline", { videoId });
 }
 
+/// Show the downloaded file in Finder / Explorer / the system file manager.
+export async function revealOfflineFile(videoId: number): Promise<void> {
+  await invoke("reveal_offline_file", { videoId });
+}
+
+/// Reveal an arbitrary absolute file path in the OS file manager.
+export async function revealPath(path: string): Promise<void> {
+  await invoke("reveal_path", { path });
+}
+
+/// Copy the offline file to a temp dir with a human-readable name and return
+/// its absolute path.  Pass the result to window.__TAURI__.drag.startDrag to
+/// initiate an OS-level drag that deposits the named file wherever the user drops.
+export async function prepareExportFile(videoId: number): Promise<string> {
+  return await invoke<string>("prepare_export_file", { videoId });
+}
+
+/// Export a video to a chosen destination path. If the video isn't offline
+/// yet, it is downloaded into the offline store first (normal pipeline, with
+/// progress events), then copied to `destPath`.
+export async function exportVideoTo(
+  videoId: number,
+  destPath: string,
+  maxHeight?: number
+): Promise<string> {
+  return await invoke<string>("export_video_to", {
+    videoId,
+    destPath,
+    maxHeight: maxHeight ?? null,
+  });
+}
+
 export async function deleteVideo(id: number): Promise<void> {
   await invoke("delete_video", { id });
 }

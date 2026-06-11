@@ -1,6 +1,6 @@
 [package]
 name = "vidminder"
-version = "0.2.12"
+version = "0.2.13"
 description = "VidMinder - drop URLs, keep a calm pool of videos to watch later"
 authors = ["VidMinder"]
 edition = "2021"
@@ -18,6 +18,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-drag = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -28,3 +29,37 @@ thiserror = "2"
 url = "2"
 dirs = "5"
 once_cell = "1"
+
+# Native macOS drag-out with NSFilePromiseProvider (see src/macos_drag.rs) —
+# versions match what the `drag` crate already pulls into the tree.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+raw-window-handle = "0.6"
+base64 = "0.22"
+objc2-app-kit = { version = "0.3", features = [
+    "std",
+    "NSEvent",
+    "NSImage",
+    "NSPasteboard",
+    "NSDragging",
+    "NSDraggingItem",
+    "NSDraggingSession",
+    "NSView",
+    "NSWindow",
+    "NSApplication",
+    "NSFilePromiseProvider",
+    "NSResponder",
+    "block2",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "std",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+    "NSData",
+    "NSArray",
+    "NSError",
+    "NSOperation",
+    "block2",
+] }

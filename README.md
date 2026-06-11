@@ -35,7 +35,7 @@ All links point to the **latest release** automatically — bookmark them and th
 - **Tags, folders, favorites** for organizing. Drag videos onto sidebar slots to bulk-organize.
 - **Search** across title, description, uploader, tags. Plus a dedicated inbox search.
 - **Universal undo** — `⌘Z`/`Ctrl+Z` undoes the last add, delete, tag change, dismiss, follow, anything.
-- **Keyboard shortcuts** — `Delete` removes the highlighted video, `⌘Delete`/`Ctrl+Delete` deletes the selected tag folder, `⌘T` focuses the tag input, `⌘,` opens settings.
+- **Keyboard shortcuts** — `⌘A`/`Ctrl+A` selects all rows, `Delete` removes the highlighted video, `⌘Delete`/`Ctrl+Delete` deletes the selected tag folder, `⌘T` focuses the tag input, `⌘,` opens settings. The full guide lives in **About VidMinder** (app menu on macOS, or the link at the bottom of Settings).
 
 ## Development
 

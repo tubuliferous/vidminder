@@ -650,6 +650,7 @@ function ChannelAvatar({ url, name }: { url: string | null; name: string }) {
         src={url}
         alt=""
         referrerPolicy="no-referrer"
+        draggable={false}
         loading="lazy"
         onError={() => setFailed(true)}
         className="w-4 h-4 rounded-full object-cover shrink-0 bg-surface-2"

@@ -1,4 +1,6 @@
 mod db;
+#[cfg(target_os = "macos")]
+mod macos_drag;
 mod youtube_rss;
 mod ytdlp;
 
@@ -968,6 +970,286 @@ fn open_in_default_app(path: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Build a human-readable export filename stem (no extension).
+/// Strips characters that are forbidden in filenames on macOS/Windows/Linux
+/// while preserving international text.
+fn make_export_stem(title: &str, upload_date: Option<&str>) -> String {
+    let sanitized: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = sanitized.trim().to_string();
+    let short = if trimmed.chars().count() > 100 {
+        trimmed.chars().take(100).collect::<String>()
+    } else {
+        trimmed
+    };
+    let year = upload_date.filter(|d| d.len() >= 4).map(|d| &d[..4]);
+    match year {
+        Some(y) => format!("{} ({})", short, y),
+        None => short,
+    }
+}
+
+/// Reveal a file in the OS file manager (Finder on macOS, Explorer on Windows,
+/// the default file manager on Linux) with the file pre-selected.
+fn reveal_in_file_manager(path: &str) -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    let spawn_result = std::process::Command::new("open")
+        .args(["-R", path])
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let spawn_result =
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{path}"))
+            .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let spawn_result = {
+        let dir = std::path::Path::new(path)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(path);
+        std::process::Command::new("xdg-open").arg(dir).spawn()
+    };
+    spawn_result.map_err(|e| AppError::Generic(format!("reveal file: {e}")))?;
+    Ok(())
+}
+
+/// Place a copy of `src` at `dest` for export. Hardlink when possible
+/// (instant, same filesystem), real copy otherwise.
+///
+/// MUST remove any stale dest first: if a previous drag left dest as a
+/// hardlink of src, `fs::copy` would open dest with truncate — truncating the
+/// SHARED inode and destroying the offline file itself (then "copying" the
+/// now-empty source). Re-dragging the same video must never be able to do that.
+fn place_export_copy(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(dest);
+    if std::fs::hard_link(src, dest).is_err() {
+        std::fs::copy(src, dest)?;
+    }
+    Ok(())
+}
+
+/// Show the locally-downloaded video file in the OS file manager.
+#[tauri::command]
+fn reveal_offline_file(video_id: i64, db: State<'_, Db>) -> AppResult<()> {
+    let path = with_conn(&db, |conn| db::get_offline_path(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video is not downloaded".into()))?;
+    reveal_in_file_manager(&path)
+}
+
+/// Reveal an arbitrary file path in the OS file manager.  Used by the export
+/// workflow where the resulting file is in ~/Downloads (not offline storage).
+#[tauri::command]
+fn reveal_path(path: String) -> AppResult<()> {
+    reveal_in_file_manager(&path)
+}
+
+/// Copy the offline video file to a temp dir under a human-readable name and
+/// return the absolute path.  The file can then be handed to `startDrag` so
+/// the OS drag operation deposits a nicely-named copy wherever the user drops
+/// it.  Hardlinks are attempted first (instant; same-filesystem); we fall back
+/// to a real copy on a cross-filesystem move.
+#[tauri::command]
+fn prepare_export_file(video_id: i64, db: State<'_, Db>) -> AppResult<String> {
+    let video = with_conn(&db, |conn| db::get_video(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video not found".into()))?;
+    let src = video
+        .offline_path
+        .ok_or_else(|| AppError::Generic("video is not downloaded".into()))?;
+    let src_path = std::path::Path::new(&src);
+    if !src_path.is_file() {
+        return Err(AppError::Generic("offline file is missing from disk".into()));
+    }
+    let ext = src_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp4");
+    let stem = make_export_stem(&video.title, video.upload_date.as_deref());
+    let name = format!("{stem}.{ext}");
+    let tmp_dir = std::env::temp_dir().join("VidMinderExport");
+    std::fs::create_dir_all(&tmp_dir)
+        .map_err(|e| AppError::Generic(format!("export temp dir: {e}")))?;
+    let dest = tmp_dir.join(&name);
+    place_export_copy(src_path, &dest)
+        .map_err(|e| AppError::Generic(format!("export copy: {e}")))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Make sure the video has a ready offline file, downloading it into the
+/// offline store via the normal pipeline if needed (progress ring,
+/// "Downloaded" state — the app keeps the copy). Dedupes with an in-flight
+/// download of the same video. Returns the offline file's path.
+async fn ensure_offline_path(
+    app: &AppHandle,
+    video_id: i64,
+    max_height: Option<i64>,
+) -> AppResult<std::path::PathBuf> {
+    let db = app.state::<Db>();
+    let video = with_conn(&db, |conn| db::get_video(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video not found".into()))?;
+
+    if video.offline_status != "ready" {
+        // Kick off the standard offline download (no-op if one is already
+        // running for this video) and wait for it to settle.
+        start_download(app, video_id, max_height)?;
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let v = with_conn(&db, |conn| db::get_video(conn, video_id))?
+                .ok_or_else(|| AppError::Generic("video was removed".into()))?;
+            match v.offline_status.as_str() {
+                "ready" => break,
+                "downloading" => {}
+                // "error" / "none" (cancelled) — nothing to export.
+                _ => {
+                    return Err(AppError::Generic(
+                        "the download didn't finish (failed or cancelled)".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    let video = with_conn(&db, |conn| db::get_video(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video not found".into()))?;
+    let src = video
+        .offline_path
+        .ok_or_else(|| AppError::Generic("offline file is missing".into()))?;
+    let src_path = std::path::PathBuf::from(&src);
+    if !src_path.is_file() {
+        return Err(AppError::Generic("offline file is missing from disk".into()));
+    }
+    Ok(src_path)
+}
+
+/// Export a video to a caller-chosen destination path (from a save dialog).
+/// Downloads into the offline store first if needed.
+#[tauri::command]
+async fn export_video_to(
+    video_id: i64,
+    dest_path: String,
+    max_height: Option<i64>,
+    app: AppHandle,
+) -> AppResult<String> {
+    let src_path = ensure_offline_path(&app, video_id, max_height).await?;
+
+    let mut dest = std::path::PathBuf::from(dest_path);
+    // If the user stripped the extension in the save dialog, restore the
+    // source's so the file stays openable.
+    if dest.extension().is_none() {
+        if let Some(ext) = src_path.extension() {
+            dest.set_extension(ext);
+        }
+    }
+    // A real copy (not a hardlink): a file the user owns elsewhere shouldn't
+    // share storage with the app's offline store.
+    std::fs::copy(src_path, &dest)
+        .map_err(|e| AppError::Generic(format!("export copy: {e}")))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Start a native macOS drag-out for a video row, promising the video file.
+/// Works for downloaded AND not-yet-downloaded videos: the receiver (Finder,
+/// the Desktop, other apps) shows the copy cursor and accepts the drop; the
+/// file is then produced at the drop location — downloading into the offline
+/// store first when needed. `image` is a PNG data URL for the drag ghost;
+/// `on_event` receives one message when the drag session ends.
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+async fn start_export_drag(
+    video_id: i64,
+    max_height: Option<i64>,
+    image: String,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> AppResult<()> {
+    let _ = (video_id, max_height, image, on_event);
+    Err(AppError::Generic(
+        "file-promise drags are macOS-only".into(),
+    ))
+}
+
+/// See above — macOS implementation.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn start_export_drag(
+    video_id: i64,
+    max_height: Option<i64>,
+    image: String,
+    window: tauri::Window,
+    app: AppHandle,
+    db: State<'_, Db>,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> AppResult<()> {
+    use base64::Engine;
+
+    let video = with_conn(&db, |conn| db::get_video(conn, video_id))?
+        .ok_or_else(|| AppError::Generic("video not found".into()))?;
+
+    // Predict the file name/type. For non-downloaded videos this matches what
+    // the download pipeline will produce (mp4 merge / mp3 audio-only).
+    let ext = if video.offline_status == "ready" {
+        video
+            .offline_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str()))
+            .unwrap_or("mp4")
+            .to_string()
+    } else if max_height == Some(0) {
+        "mp3".into()
+    } else {
+        "mp4".into()
+    };
+    let stem = make_export_stem(&video.title, video.upload_date.as_deref());
+    let file_name = format!("{stem}.{ext}");
+    let file_type_uti = match ext.as_str() {
+        "mp4" | "m4v" | "mov" => "public.mpeg-4",
+        "mp3" => "public.mp3",
+        "m4a" => "public.mpeg-4-audio",
+        _ => "public.movie",
+    }
+    .to_string();
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(image.strip_prefix("data:image/png;base64,").unwrap_or(&image))
+        .map_err(|e| AppError::Generic(format!("bad drag image: {e}")))?;
+
+    let app_for_write = app.clone();
+    let write: macos_drag::WriteFn = Box::new(move |dest, done| {
+        let app = app_for_write.clone();
+        tauri::async_runtime::spawn(async move {
+            let res = async {
+                let src = ensure_offline_path(&app, video_id, max_height).await?;
+                std::fs::copy(&src, &dest)
+                    .map_err(|e| AppError::Generic(format!("export copy: {e}")))?;
+                Ok::<(), AppError>(())
+            }
+            .await;
+            done(res.map_err(|e| e.to_string()));
+        });
+    });
+    let on_end: macos_drag::EndFn = Box::new(move |dropped| {
+        let _ = on_event.send(serde_json::json!({ "dropped": dropped }));
+    });
+
+    macos_drag::start_promise_drag(
+        &app,
+        window,
+        macos_drag::PromiseDragOptions {
+            file_name,
+            file_type_uti,
+            url_text: video.url.clone(),
+            png,
+        },
+        write,
+        on_end,
+    )
+    .map_err(AppError::Generic)
+}
+
 #[tauri::command]
 fn restore_video(video: Video, db: State<'_, Db>) -> AppResult<Video> {
     with_conn(&db, |conn| {
@@ -1292,6 +1574,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             // On Linux & on Windows-dev, URL scheme registration must be done
             // at runtime. Production Windows installers (MSI/NSIS) handle it
@@ -1307,6 +1590,32 @@ pub fn run() {
             // the embedded Python runtime (<resource_dir>/runtime/).
             if let Ok(res) = app.path().resource_dir() {
                 ytdlp::set_resource_dir(res);
+            }
+
+            // Replace the default macOS "About <binary name>" menu item (it
+            // shows lowercase "vidminder" in dev) with one that opens the
+            // in-app About dialog — proper name, instructions, shortcut guide.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItem, MenuItemKind};
+                let menu = Menu::default(app.handle())?;
+                if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+                    let about = MenuItem::with_id(
+                        app.handle(),
+                        "about-vidminder",
+                        "About VidMinder",
+                        true,
+                        None::<&str>,
+                    )?;
+                    let _ = app_menu.remove_at(0); // the default About item
+                    let _ = app_menu.insert(&about, 0);
+                }
+                app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    if event.id() == "about-vidminder" {
+                        let _ = app.emit("open-about", ());
+                    }
+                });
             }
 
             let database = db::open_db().expect("opening database");
@@ -1348,6 +1657,11 @@ pub fn run() {
             cancel_download,
             delete_offline,
             open_offline,
+            reveal_offline_file,
+            reveal_path,
+            prepare_export_file,
+            export_video_to,
+            start_export_drag,
             set_watched,
             set_favorite,
             add_tag,
@@ -1362,4 +1676,43 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running VidMinder");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: exporting the same video twice must not destroy the
+    /// source. The first export hardlinks src→dest; without the stale-dest
+    /// removal, the second export's fs::copy fallback truncated the shared
+    /// inode, zeroing the offline file itself.
+    #[test]
+    fn repeated_export_keeps_source_intact() {
+        let dir = std::env::temp_dir().join("vidminder-export-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("source.mp4");
+        let dest = dir.join("Pretty Name (2026).mp4");
+        std::fs::write(&src, b"video bytes here").unwrap();
+
+        for _ in 0..3 {
+            place_export_copy(&src, &dest).unwrap();
+            assert_eq!(
+                std::fs::metadata(&src).unwrap().len(),
+                16,
+                "source must never be truncated by an export"
+            );
+            assert_eq!(std::fs::metadata(&dest).unwrap().len(), 16);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_stem_sanitizes_and_keeps_unicode() {
+        assert_eq!(
+            make_export_stem("What: a/b \"test\"?", Some("20240115")),
+            "What_ a_b _test__ (2024)"
+        );
+        assert_eq!(make_export_stem("한국어 제목", None), "한국어 제목");
+    }
 }

@@ -307,6 +307,7 @@ function ResultRow({
             src={thumb}
             alt=""
             referrerPolicy="no-referrer"
+            draggable={false}
             loading="lazy"
             className={"w-full h-full object-cover " + (watched ? "opacity-50" : "")}
           />

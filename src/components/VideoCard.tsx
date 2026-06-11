@@ -5,6 +5,7 @@ import {
   formatUploadDate,
   DRAG_MIME,
 } from "../utils";
+import { cachedRowDragImage, ensureRowDragImage } from "../dragImage";
 import * as api from "../api";
 
 type Props = {
@@ -28,6 +29,16 @@ type Props = {
   onRequestQualityMenu: (x: number, y: number) => void;
   /// Open the card's in-app context menu at the given screen coords.
   onRequestContextMenu: (x: number, y: number) => void;
+  /// Start a native OS file drag for a DOWNLOADED video. The whole row drag
+  /// becomes the export gesture: drop on the Desktop/Finder to copy the file,
+  /// drop on a sidebar tag to organize (the drag also carries the video URL).
+  onNativeFileDrag?: () => void;
+  /// The user dragged a NOT-downloaded video out of the app window: offer the
+  /// save dialog (download first, then export to the chosen location).
+  onDragOutExport?: () => void;
+  /// Export via a save dialog (click action on the export button). Downloads
+  /// first if the video isn't offline yet.
+  onExportFile?: () => void;
 };
 
 export function VideoCard({
@@ -45,22 +56,87 @@ export function VideoCard({
   onPlayOffline,
   onRequestQualityMenu,
   onRequestContextMenu,
+  onNativeFileDrag,
+  onDragOutExport,
+  onExportFile,
 }: Props) {
   const duration = formatDuration(video.duration);
+  const dragKey = `v${video.id}`;
+  const dragLook = {
+    title: video.title,
+    subtitle: video.uploader ?? video.source,
+    thumbnailUrl: video.thumbnail_url,
+  };
   return (
+    <div className="relative group">
     <div
       draggable
       onDragStart={(e) => {
+        // If a stray text selection exists, WebKit composites the WHOLE
+        // selection into the drag snapshot — a ghost of other rows' text
+        // floats along with the card. Clear it, and never let WebKit generate
+        // the image: use our pre-rendered row card (same look as the native
+        // file drag) instead.
+        window.getSelection()?.removeAllRanges();
+        if (onNativeFileDrag) {
+          // Replace the HTML5 drag with a native OS file drag (file promise
+          // on macOS — works even before the video is downloaded). Dropping
+          // on the Desktop/Finder produces the file; dropping on a sidebar
+          // tag still organizes, because the drag also carries the video URL
+          // as plain text. App passes this prop only where supported.
+          e.preventDefault();
+          onNativeFileDrag();
+          return;
+        }
+        const cached = cachedRowDragImage(dragKey);
+        if (cached) {
+          e.dataTransfer.setDragImage(cached.img, 24, 38);
+        } else {
+          const rect = e.currentTarget.getBoundingClientRect();
+          e.dataTransfer.setDragImage(
+            e.currentTarget,
+            e.clientX - rect.left,
+            e.clientY - rect.top
+          );
+        }
         e.dataTransfer.effectAllowed = "copyMove";
         e.dataTransfer.setData(DRAG_MIME, String(video.id));
         // Also stash title for fallback text drag visuals.
         e.dataTransfer.setData("text/x-vidminder-title", video.title);
         onDragStateChange?.(true);
       }}
-      onDragEnd={() => onDragStateChange?.(false)}
+      onDragEnd={(e) => {
+        onDragStateChange?.(false);
+        // Dragging a not-yet-downloaded video out of the app window exports
+        // it: download to ~/Downloads. (A file can't be deposited at an
+        // arbitrary OS drop point because it doesn't exist yet at drop time.)
+        if (
+          video.offline_status !== "ready" &&
+          e.dataTransfer.dropEffect === "none" &&
+          onDragOutExport
+        ) {
+          // dragend's client coords are the release point; outside the
+          // viewport means the row was dropped beyond the app window.
+          const outside =
+            e.clientX < 0 ||
+            e.clientY < 0 ||
+            e.clientX > window.innerWidth ||
+            e.clientY > window.innerHeight;
+          if (outside) onDragOutExport();
+        }
+      }}
       onClick={onSelect}
-      onMouseDown={onMouseDownRow}
-      onMouseEnter={onMouseEnterRow}
+      onMouseDown={(e) => {
+        // Clear any stray selection BEFORE WebKit builds the drag store (it
+        // decides what's being dragged at mousedown, before dragstart fires).
+        window.getSelection()?.removeAllRanges();
+        onMouseDownRow?.(e);
+      }}
+      onMouseEnter={(e) => {
+        // Pre-render the drag image so it's ready synchronously at dragstart.
+        ensureRowDragImage(dragKey, dragLook);
+        onMouseEnterRow?.(e);
+      }}
       onDoubleClick={onOpen}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -68,7 +144,7 @@ export function VideoCard({
         onRequestContextMenu(e.clientX, e.clientY);
       }}
       className={
-        "group flex gap-3 px-3 py-2.5 cursor-pointer border-l-2 transition-colors " +
+        "flex gap-3 px-3 py-2.5 cursor-pointer border-l-2 transition-colors select-none " +
         (selected
           ? "bg-surface-2 border-accent"
           : "border-transparent hover:bg-surface")
@@ -80,6 +156,10 @@ export function VideoCard({
             src={video.thumbnail_url}
             alt=""
             referrerPolicy="no-referrer"
+            // Without this, grabbing the thumbnail starts a native *image*
+            // drag (WKWebView) with a different ghost, bypassing the row's
+            // drag handling entirely. The row, not the image, owns the drag.
+            draggable={false}
             className={
               "w-full h-full object-cover " + (video.watched ? "opacity-50" : "")
             }
@@ -191,6 +271,27 @@ export function VideoCard({
           </div>
         )}
       </div>
+    </div>
+    {onExportFile && (
+      // Sits outside the draggable div so it never participates in the row
+      // drag. Click = export via a save dialog (downloading first if the
+      // video isn't offline yet). Dragging the ROW exports too.
+      <button
+        title={
+          video.offline_status === "ready"
+            ? "Export video file… · or drag the row to the Desktop"
+            : "Export video file… (downloads first) · or drag the row out of the window"
+        }
+        className="absolute top-1/2 -translate-y-1/2 right-2 opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center rounded text-ink-faint hover:text-ink hover:bg-surface-2 transition z-10"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onExportFile();
+        }}
+      >
+        <ExportIcon size={12} />
+      </button>
+    )}
     </div>
   );
 }
@@ -308,6 +409,26 @@ function CheckIcon({ size = 14 }: { size?: number }) {
       strokeLinejoin="round"
     >
       <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function ExportIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {/* box with arrow pointing up-right — standard "export" affordance */}
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
     </svg>
   );
 }

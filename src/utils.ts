@@ -249,6 +249,11 @@ export function uid(): string {
 }
 
 export const DRAG_MIME = "application/x-vidminder-video";
+/// Marks a drag that originates from an inbox/channel row. Those drags also
+/// carry the watch URL as text; this marker lets the global window handlers
+/// keep the drop-anywhere-to-add behavior for them without showing the
+/// external-URL "Drop URL to add" overlay.
+export const INBOX_DRAG_MIME = "application/x-vidminder-inbox";
 
 export function extractUrlFromDrop(e: React.DragEvent | DragEvent): string | null {
   const dt = e.dataTransfer;

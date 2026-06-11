@@ -51,6 +51,7 @@ export function ChannelDetails({
             src={channel.thumbnail_url}
             alt=""
             referrerPolicy="no-referrer"
+            draggable={false}
             onError={() => setImgFailed(true)}
             className="w-28 h-28 rounded-full object-cover bg-surface-2"
           />

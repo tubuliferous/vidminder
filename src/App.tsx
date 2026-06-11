@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke, Channel as TauriChannel } from "@tauri-apps/api/core";
+import { downloadDir } from "@tauri-apps/api/path";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import * as api from "./api";
 import type {
@@ -17,11 +20,13 @@ import { ChannelDetails } from "./components/ChannelDetails";
 import { InboxView } from "./components/InboxView";
 import { InboxRow } from "./components/InboxRow";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { AboutDialog } from "./components/AboutDialog";
 import { SearchPalette } from "./components/SearchPalette";
 import { DownloadQualityMenu } from "./components/DownloadQualityMenu";
 import { ContextMenu, type MenuItem } from "./components/ContextMenu";
 import {
   DRAG_MIME,
+  INBOX_DRAG_MIME,
   extractUrlFromDrop,
   looksLikeChannelUrl,
   normalizeYouTubeInput,
@@ -31,8 +36,9 @@ import {
   uid,
   copyText,
 } from "./utils";
-import { offlineQualityLabel, useSettings } from "./settings";
-import { kbd, kbdClick, shiftClick } from "./platform";
+import { OFFLINE_AUDIO, offlineQualityLabel, useSettings } from "./settings";
+import { ensureRowDragImage } from "./dragImage";
+import { isMac, kbd, kbdClick, shiftClick } from "./platform";
 
 type Pending = { id: string; url: string; kind: "video" | "channel" };
 type SortMode = "added" | "uploaded" | "length";
@@ -53,6 +59,28 @@ type UndoEntry = {
 const UNDO_TOAST_MS = 6500;
 const UNDO_TTL_MS = 90_000;
 const UNDO_STACK_MAX = 40;
+
+/// Encode an absolute filesystem path as a file:// URL (per-segment encoding
+/// so spaces, #, etc. in titles survive).
+function fileUrlFromPath(path: string): string {
+  return "file://" + path.split("/").map(encodeURIComponent).join("/");
+}
+
+/// Suggested export filename stem — mirrors the backend's `make_export_stem`
+/// (sanitize filesystem-hostile characters, keep international text, append
+/// the upload year).
+function exportFileStem(video: Video): string {
+  const sanitized = video.title
+    // eslint-disable-next-line no-control-regex
+    .replace(/[/\\:*?"<>|\u0000-\u001f]/g, "_")
+    .trim();
+  const short = [...sanitized].slice(0, 100).join("");
+  const year =
+    video.upload_date && video.upload_date.length >= 4
+      ? video.upload_date.slice(0, 4)
+      : null;
+  return year ? `${short} (${year})` : short;
+}
 
 /** True if tag `t` is `base` or a dotted descendant of it (case-insensitive). */
 function isTagOrSubtag(t: string, base: string): boolean {
@@ -117,6 +145,9 @@ function App() {
   // for tag-tree operations).
   const videosRef = useRef<Video[]>([]);
   videosRef.current = videos;
+  // The currently *visible* list (filter + search + sort applied) — assigned
+  // below once `filtered` is computed; read by the ⌘A select-all shortcut.
+  const filteredRef = useRef<Video[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [inbox, setInbox] = useState<ChannelVideo[]>([]);
   const [filter, setFilter] = useState<Filter>({ kind: "all" });
@@ -145,8 +176,23 @@ function App() {
   // longest first); "asc" flips it (oldest / shortest first).
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  // The macOS app menu's "About VidMinder" item opens the in-app About.
+  useEffect(() => {
+    const un = listen("open-about", () => setAboutOpen(true));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false);
   const [draggingVideo, setDraggingVideo] = useState(false);
+  // Mirror for the window-level drag listeners: they're long-lived (bound
+  // once), so they read the current value through a ref. True while ANY
+  // in-app row drag is active — HTML5 or native file drag.
+  const draggingVideoRef = useRef(false);
+  useEffect(() => {
+    draggingVideoRef.current = draggingVideo;
+  }, [draggingVideo]);
   // Per-action in-flight trackers — keep buttons disabled and showing
   // progress until the underlying async work resolves.
   const [resurfacingChannelId, setResurfacingChannelId] = useState<number | null>(null);
@@ -383,6 +429,140 @@ function App() {
       } catch (e) {
         pushToast({ kind: "err", text: `Couldn't open file: ${e}` });
       }
+    },
+    [pushToast]
+  );
+
+  const handleRevealOfflineFile = useCallback(
+    (videoId: number) => {
+      api.revealOfflineFile(videoId).catch((e) =>
+        pushToast({ kind: "err", text: `Couldn't show file: ${e}` })
+      );
+    },
+    [pushToast]
+  );
+
+  // Native OS file drag for a video row. On macOS this is a FILE-PROMISE drag
+  // (start_export_drag): Finder shows the copy cursor and accepts the drop for
+  // downloaded AND not-yet-downloaded videos — the backend downloads to the
+  // offline store if needed, then writes the file at the drop location. The
+  // drag also carries the video URL as text, so in-app tag drops keep working.
+  // On other platforms (downloaded videos only) it falls back to the drag
+  // plugin carrying a pre-copied file URL.
+  const handleNativeFileDrag = useCallback(
+    async (video: Video) => {
+      try {
+        setDraggingVideo(true);
+        const { dataUrl: image } = await ensureRowDragImage(`v${video.id}`, {
+          title: video.title,
+          subtitle: video.uploader ?? video.source,
+          thumbnailUrl: video.thumbnail_url,
+        });
+        const onEvent = new TauriChannel<unknown>();
+        // The drag session ends (drop or cancel) → clear the drop-target
+        // affordances in the sidebar.
+        onEvent.onmessage = () => setDraggingVideo(false);
+        if (isMac) {
+          await invoke("start_export_drag", {
+            videoId: video.id,
+            maxHeight: settings.offlineMaxHeight,
+            image,
+            onEvent,
+          });
+          return;
+        }
+        const path = await api.prepareExportFile(video.id);
+        await invoke("plugin:drag|start_drag", {
+          item: {
+            data: {
+              "public.file-url": fileUrlFromPath(path),
+              "public.url": video.url,
+              "public.utf8-plain-text": video.url,
+            },
+            types: ["public.file-url", "public.url", "public.utf8-plain-text"],
+          },
+          image,
+          options: { mode: "copy" },
+          onEvent,
+        });
+      } catch (err) {
+        setDraggingVideo(false);
+        pushToast({ kind: "err", text: `Export failed: ${err}` });
+      }
+    },
+    [settings.offlineMaxHeight, pushToast]
+  );
+
+  // Export via a save dialog: the user picks where the file goes. If the
+  // video isn't offline yet it's downloaded into the offline store first
+  // (normal pipeline — progress ring, the app keeps the copy), then the
+  // export is a plain file copy to the chosen path.
+  const handleExportVideo = useCallback(
+    async (video: Video) => {
+      const ready = video.offline_status === "ready";
+      const ext =
+        ready && video.offline_path
+          ? video.offline_path.split(".").pop() || "mp4"
+          : settings.offlineMaxHeight === OFFLINE_AUDIO
+          ? "mp3"
+          : "mp4";
+      let chosen: string | null = null;
+      try {
+        const dir = await downloadDir().catch(() => null);
+        const name = `${exportFileStem(video)}.${ext}`;
+        chosen = await saveDialog({
+          defaultPath: dir ? `${dir}/${name}` : name,
+          filters: [{ name: "Video", extensions: [ext] }],
+        });
+      } catch (err) {
+        pushToast({ kind: "err", text: `Couldn't open save dialog: ${err}` });
+        return;
+      }
+      if (!chosen) return; // user cancelled
+      if (!ready) {
+        pushToast({
+          kind: "ok",
+          text: `Downloading “${video.title}” — it will be exported when done`,
+        });
+      }
+      try {
+        const path = await api.exportVideoTo(
+          video.id,
+          chosen,
+          settings.offlineMaxHeight
+        );
+        const filename = path.split(/[\\/]/).pop() ?? path;
+        pushToast({
+          kind: "ok",
+          text: `Exported: ${filename}`,
+          action: {
+            label: `Show in ${isMac ? "Finder" : "Explorer"}`,
+            onClick: () => api.revealPath(path).catch(() => {}),
+          },
+        });
+      } catch (err) {
+        pushToast({ kind: "err", text: `Export failed: ${err}` });
+      }
+    },
+    [settings.offlineMaxHeight, pushToast]
+  );
+
+  const handleBatchRemoveDownloads = useCallback(
+    async (vids: Video[]) => {
+      const targets = vids.filter((v) => v.offline_status !== "none");
+      if (targets.length === 0) return;
+      const results = await Promise.allSettled(
+        targets.map((v) => api.deleteOffline(v.id))
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      pushToast(
+        failed > 0
+          ? { kind: "err", text: `Couldn't remove ${failed} of ${targets.length} downloads` }
+          : {
+              kind: "ok",
+              text: `Removed ${targets.length} ${targets.length === 1 ? "download" : "downloads"}`,
+            }
+      );
     },
     [pushToast]
   );
@@ -996,7 +1176,16 @@ function App() {
       ];
       if (status === "ready") {
         items.push({ label: "Play downloaded file", onClick: () => handlePlayOffline(video) });
+        items.push({
+          label: `Show in ${isMac ? "Finder" : "Explorer"}`,
+          onClick: () => handleRevealOfflineFile(video.id),
+        });
       }
+      // Available for every status — non-downloaded videos download first.
+      items.push({
+        label: "Export video file…",
+        onClick: () => handleExportVideo(video),
+      });
       items.push({ kind: "separator" });
       if (status === "ready") {
         items.push({ label: "Remove download", onClick: () => handleDeleteOffline(video.id) });
@@ -1049,6 +1238,8 @@ function App() {
       handleToggleFavorite,
       handleToggleWatched,
       handleDeleteVideo,
+      handleRevealOfflineFile,
+      handleExportVideo,
       pushToast,
     ]
   );
@@ -1286,9 +1477,17 @@ function App() {
 
   useEffect(() => {
     const isInAppDrag = (e: DragEvent) => {
+      // Row drags carry our custom MIMEs (HTML5 paths) — but native
+      // file-promise drags from our own rows look like external URL drags to
+      // the webview, so also consult the draggingVideo flag, which is set for
+      // every in-app row drag. The "Drop URL to add" overlay is only for
+      // genuinely external drags (URLs from a browser, etc.).
+      if (draggingVideoRef.current) return true;
       const types = Array.from(e.dataTransfer?.types || []);
-      return types.includes(DRAG_MIME);
+      return types.includes(DRAG_MIME) || types.includes(INBOX_DRAG_MIME);
     };
+    const isInboxRowDrag = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types || []).includes(INBOX_DRAG_MIME);
     const onDragEnter = (e: DragEvent) => {
       if (!e.dataTransfer) return;
       if (isInAppDrag(e)) return;
@@ -1300,7 +1499,19 @@ function App() {
     };
     const onDragOver = (e: DragEvent) => {
       if (!e.dataTransfer) return;
-      if (isInAppDrag(e)) return;
+      if (isInAppDrag(e)) {
+        // If an inner drop target (tag folder, sidebar slot) already claimed
+        // this event, leave its dropEffect alone. Otherwise we MUST cancel
+        // the default ourselves: an unhandled URL drop makes WKWebView
+        // NAVIGATE to the dragged URL, hijacking the whole app.
+        if (!e.defaultPrevented) {
+          e.preventDefault();
+          // Inbox/channel rows may be dropped anywhere in the window to add
+          // them; other in-app drags show the no-drop cursor here.
+          e.dataTransfer.dropEffect = isInboxRowDrag(e) ? "copy" : "none";
+        }
+        return;
+      }
       const types = Array.from(e.dataTransfer.types || []);
       if (!types.some((t) => t === "text/uri-list" || t === "text/plain")) return;
       e.preventDefault();
@@ -1311,8 +1522,11 @@ function App() {
       if (dragDepth.current === 0) setDragHover(false);
     };
     const onDrop = (e: DragEvent) => {
-      if (isInAppDrag(e)) {
-        // Let sidebar drop targets handle it (or quietly ignore if dropped elsewhere).
+      if (isInAppDrag(e) && !isInboxRowDrag(e)) {
+        // Sidebar drop targets have already handled their own drops by now.
+        // Swallow everything else — letting the default run would make
+        // WKWebView navigate to the dragged video's URL in-place.
+        e.preventDefault();
         return;
       }
       // A sidebar tag node handles its own URL drops (ingest + auto-tag).
@@ -1531,6 +1745,17 @@ function App() {
         return;
       }
 
+      // ⌘A / Ctrl+A selects every row in the current view. Inside a text
+      // field the browser's own select-all must keep working.
+      if (meta && (e.key === "a" || e.key === "A") && !e.shiftKey) {
+        if (inField) return;
+        const visible = filteredRef.current;
+        if (visible.length === 0) return;
+        e.preventDefault();
+        setSelectedIds(new Set(visible.map((v) => v.id)));
+        return;
+      }
+
       // ⌘/Ctrl+Delete (or Backspace) deletes the active tag folder — the tag and
       // all its sub-tags, from every video. Undoable via the toast / ⌘Z.
       if (meta && (e.key === "Delete" || e.key === "Backspace")) {
@@ -1678,6 +1903,7 @@ function App() {
     if (sortDir === "asc") matched.reverse();
     return matched;
   }, [videos, channels, filter, search, effectiveSortMode, sortDir, settings.showShorts]);
+  filteredRef.current = filtered;
 
   // Every distinct full dotted tag currently in use. Powers the tag editor's
   // nesting-aware autocomplete (Calibre-style).
@@ -2068,7 +2294,7 @@ function App() {
               className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
             />
             <div className="text-[11.5px] text-ink-faint hidden md:block">
-              {kbd("K")} search · {kbd("V")} paste · {kbd("Z")} undo · Delete remove
+              {kbd("K")} search · {kbd("V")} paste · {kbd("A")} select all · {kbd("Z")} undo · Delete remove
             </div>
             {filter.kind !== "inbox" && (
               <label className="flex items-center gap-1.5 text-[11.5px] text-ink-faint shrink-0">
@@ -2168,6 +2394,7 @@ function App() {
                   src={currentChannel.thumbnail_url}
                   alt=""
                   referrerPolicy="no-referrer"
+                  draggable={false}
                   className="w-6 h-6 rounded-full object-cover"
                 />
               )}
@@ -2386,6 +2613,17 @@ function App() {
                               onRequestContextMenu={(x, y) =>
                                 setCardMenu({ video: v, x, y })
                               }
+                              onNativeFileDrag={
+                                isMac || v.offline_status === "ready"
+                                  ? () => handleNativeFileDrag(v)
+                                  : undefined
+                              }
+                              onDragOutExport={() =>
+                                handleExportVideo(v)
+                              }
+                              onExportFile={() =>
+                                handleExportVideo(v)
+                              }
                             />
                           </li>
                         ))}
@@ -2439,6 +2677,13 @@ function App() {
                         onRequestContextMenu={(x, y) =>
                           setCardMenu({ video: v, x, y })
                         }
+                        onNativeFileDrag={
+                          isMac || v.offline_status === "ready"
+                            ? () => handleNativeFileDrag(v)
+                            : undefined
+                        }
+                        onDragOutExport={() => handleExportVideo(v)}
+                        onExportFile={() => handleExportVideo(v)}
                       />
                     </li>
                   ))}
@@ -2461,6 +2706,7 @@ function App() {
                       onClearSelection={clearSelection}
                       defaultMaxHeight={settings.offlineMaxHeight}
                       onBatchDownload={handleBatchDownload}
+                      onBatchRemoveDownloads={handleBatchRemoveDownloads}
                     />
                   </div>
                 ) : selectedVideo ? (
@@ -2553,7 +2799,13 @@ function App() {
         settings={settings}
         onChange={updateSettings}
         onClose={() => setSettingsOpen(false)}
+        onOpenAbout={() => {
+          setSettingsOpen(false);
+          setAboutOpen(true);
+        }}
       />
+
+      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       <SearchPalette
         open={searchOpen}

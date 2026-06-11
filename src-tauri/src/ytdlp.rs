@@ -773,10 +773,41 @@ where
         buf
     });
 
+    // yt-dlp downloads several streams in sequence (subtitles, then video,
+    // then audio), each reporting its own 0→100%. Map them onto one monotonic
+    // scale so the UI ring/bar fills ONCE instead of repeating per stream:
+    // subtitle streams are ignored (tiny), the first media stream covers
+    // 0–85%, the second 85–99%, and completion lands on 100%.
+    let mut media_phase: u32 = 0;
+    let mut in_subtitle = false;
+    let mut last_emitted: f64 = 0.0;
     let mut lines = BufReader::new(stdout).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(pct) = parse_progress(&line) {
-            on_progress(pct);
+        let trimmed = line.trim();
+        if let Some(dest) = trimmed.strip_prefix("[download] Destination: ") {
+            in_subtitle = Path::new(dest)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "srt" | "vtt" | "ass" | "ssa"))
+                .unwrap_or(false);
+            if !in_subtitle {
+                media_phase += 1;
+            }
+            continue;
+        }
+        if in_subtitle {
+            continue;
+        }
+        if let Some(pct) = parse_progress(trimmed) {
+            let overall = match media_phase {
+                0 | 1 => pct * 0.85,
+                2 => 85.0 + pct * 0.14,
+                _ => 99.0,
+            };
+            if overall > last_emitted {
+                last_emitted = overall;
+                on_progress(overall);
+            }
         }
     }
 
