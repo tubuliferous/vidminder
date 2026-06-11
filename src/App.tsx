@@ -62,9 +62,6 @@ const UNDO_STACK_MAX = 40;
 
 /// Encode an absolute filesystem path as a file:// URL (per-segment encoding
 /// so spaces, #, etc. in titles survive).
-function fileUrlFromPath(path: string): string {
-  return "file://" + path.split("/").map(encodeURIComponent).join("/");
-}
 
 /// Suggested export filename stem — mirrors the backend's `make_export_stem`
 /// (sanitize filesystem-hostile characters, keep international text, append
@@ -472,17 +469,11 @@ function App() {
           return;
         }
         const path = await api.prepareExportFile(video.id);
+        // plugin:drag|start_drag needs the raw base64 PNG, not the full data URL
+        const imageB64 = image.includes(",") ? image.split(",")[1] : image;
         await invoke("plugin:drag|start_drag", {
-          item: {
-            data: {
-              "public.file-url": fileUrlFromPath(path),
-              "public.url": video.url,
-              "public.utf8-plain-text": video.url,
-            },
-            types: ["public.file-url", "public.url", "public.utf8-plain-text"],
-          },
-          image,
-          options: { mode: "copy" },
+          item: { paths: [path] },
+          image: imageB64,
           onEvent,
         });
       } catch (err) {
@@ -545,6 +536,46 @@ function App() {
       }
     },
     [settings.offlineMaxHeight, pushToast]
+  );
+
+  // Used when a non-downloaded video row is dragged out of the app window on
+  // Windows/Linux. File promises aren't available on those platforms, so we
+  // can't know where the user dropped it — instead we download to the offline
+  // store and copy to the system Downloads folder automatically (no dialog).
+  const handleDragOutExport = useCallback(
+    async (video: Video) => {
+      const ext = settings.offlineMaxHeight === OFFLINE_AUDIO ? "mp3" : "mp4";
+      const name = `${exportFileStem(video)}.${ext}`;
+      try {
+        const dir = await downloadDir().catch(() => null);
+        if (!dir) {
+          // No Downloads folder — fall back to the save dialog.
+          return handleExportVideo(video);
+        }
+        const dest = `${dir}/${name}`;
+        pushToast({
+          kind: "ok",
+          text: `Exporting "${video.title}" — saving to Downloads when ready`,
+        });
+        const path = await api.exportVideoTo(
+          video.id,
+          dest,
+          settings.offlineMaxHeight
+        );
+        const filename = path.split(/[\\/]/).pop() ?? path;
+        pushToast({
+          kind: "ok",
+          text: `Exported: ${filename}`,
+          action: {
+            label: `Show in ${isMac ? "Finder" : "Explorer"}`,
+            onClick: () => api.revealPath(path).catch(() => {}),
+          },
+        });
+      } catch (err) {
+        pushToast({ kind: "err", text: `Export failed: ${err}` });
+      }
+    },
+    [settings.offlineMaxHeight, pushToast, handleExportVideo]
   );
 
   const handleBatchRemoveDownloads = useCallback(
@@ -2619,7 +2650,7 @@ function App() {
                                   : undefined
                               }
                               onDragOutExport={() =>
-                                handleExportVideo(v)
+                                handleDragOutExport(v)
                               }
                               onExportFile={() =>
                                 handleExportVideo(v)
@@ -2682,7 +2713,7 @@ function App() {
                             ? () => handleNativeFileDrag(v)
                             : undefined
                         }
-                        onDragOutExport={() => handleExportVideo(v)}
+                        onDragOutExport={() => handleDragOutExport(v)}
                         onExportFile={() => handleExportVideo(v)}
                       />
                     </li>
