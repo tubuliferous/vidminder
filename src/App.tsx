@@ -349,6 +349,10 @@ function App() {
     api.setChannelLookbackDays(settings.channelLookbackDays).catch(() => {});
   }, [settings.channelLookbackDays]);
 
+  useEffect(() => {
+    api.setCookiesBrowser(settings.cookiesBrowser).catch(() => {});
+  }, [settings.cookiesBrowser]);
+
   // Backend events (e.g. background polling brought in new inbox items)
   useEffect(() => {
     const ul1 = listen("videos-changed", () => refreshVideos());

@@ -24,6 +24,9 @@ export type Settings = {
   /// (badged) into the chronological upload list. Off by default — added
   /// videos sort inline with everything else.
   separateAddedInChannels: boolean;
+  /// Which browser yt-dlp should pull cookies from when YouTube requires sign-in.
+  /// Empty string means no --cookies-from-browser flag (the default).
+  cookiesBrowser: string;
 };
 
 const DEFAULTS: Settings = {
@@ -34,6 +37,7 @@ const DEFAULTS: Settings = {
   offlineMaxHeight: 720,
   showShorts: false,
   separateAddedInChannels: false,
+  cookiesBrowser: "",
 };
 
 export const POLL_INTERVAL_PRESETS: { value: number; label: string; hint: string }[] = [

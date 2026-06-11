@@ -240,6 +240,30 @@ export function SettingsDialog({
           </label>
         </section>
 
+        <section className="mt-6 pt-5 border-t border-line">
+          <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
+            YouTube authentication
+          </div>
+          <select
+            value={settings.cookiesBrowser}
+            onChange={(e) => onChange({ cookiesBrowser: e.target.value })}
+            className="w-full text-[13px] px-2 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+          >
+            <option value="">None (no cookies)</option>
+            <option value="safari">Safari</option>
+            <option value="chrome">Chrome</option>
+            <option value="firefox">Firefox</option>
+            <option value="edge">Edge</option>
+            <option value="brave">Brave</option>
+            <option value="chromium">Chromium</option>
+          </select>
+          <div className="text-[11.5px] text-ink-faint mt-1">
+            If YouTube shows "Sign in to confirm you're not a bot", pick the browser
+            where you're logged into YouTube. VidMinder will pass those cookies to
+            yt-dlp for all requests.
+          </div>
+        </section>
+
         <section className="mt-6 pt-5 border-t border-line text-[11.5px] text-ink-faint leading-relaxed">
           <div className="font-semibold text-ink-dim mb-1">Tips</div>
           <ul className="list-disc pl-4 space-y-0.5">

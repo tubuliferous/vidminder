@@ -85,6 +85,10 @@ export async function setChannelLookbackDays(days: number): Promise<void> {
   await invoke("set_channel_lookback_days", { days });
 }
 
+export async function setCookiesBrowser(browser: string): Promise<void> {
+  await invoke("set_cookies_browser", { browser: browser || null });
+}
+
 export async function listVideos(): Promise<Video[]> {
   return await invoke<Video[]>("list_videos");
 }

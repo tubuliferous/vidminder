@@ -36,6 +36,16 @@ struct AppConfig {
     lookback_secs: std::sync::atomic::AtomicI64,
 }
 
+/// Which browser yt-dlp should read cookies from when YouTube requires sign-in
+/// ("Sign in to confirm you're not a bot"). None means no --cookies-from-browser
+/// flag is passed. Updated at app start and whenever the user changes the setting.
+struct CookieBrowser(StdMutex<Option<String>>);
+
+fn cookies_browser(app: &AppHandle) -> Option<String> {
+    app.try_state::<CookieBrowser>()
+        .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()))
+}
+
 /// Current lookback window (seconds), falling back to the default if unset.
 fn lookback_secs(app: &AppHandle) -> i64 {
     app.try_state::<AppConfig>()
@@ -108,13 +118,14 @@ fn start_download(app: &AppHandle, video_id: i64, max_height: Option<i64>) -> Ap
         DownloadProgress { id: video_id, percent: 0.0, status: "downloading", message: None },
     );
 
+    let cb = cookies_browser(app).map(|s| s.to_string());
     let gate = mgr.gate.clone();
     let app2 = app.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let _permit = gate.acquire().await; // bounded concurrency
         let stem = video_id.to_string();
         let progress_app = app2.clone();
-        let result = ytdlp::download_video(&url, &dest, &stem, max_height, move |pct| {
+        let result = ytdlp::download_video(&url, &dest, &stem, max_height, cb.as_deref(), move |pct| {
             let _ = progress_app.emit(
                 "download-progress",
                 DownloadProgress { id: video_id, percent: pct, status: "downloading", message: None },
@@ -224,7 +235,7 @@ fn validate_youtube_url(raw: &str) -> AppResult<()> {
     Ok(())
 }
 
-async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
+async fn add_video_inner(url: &str, db: &Db, cookies: Option<&str>) -> AppResult<Video> {
     {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
         if let Some(existing_id) = db::find_video_by_url(&conn, url)
@@ -237,7 +248,7 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
         }
     }
 
-    let info = ytdlp::fetch_info(url)
+    let info = ytdlp::fetch_info(url, cookies)
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
@@ -314,10 +325,16 @@ async fn add_video_inner(url: &str, db: &Db) -> AppResult<Video> {
     Ok(v)
 }
 
-async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult<Channel> {
-    let mut listing = ytdlp::fetch_channel_listing(url, max_entries_for_window(window_secs))
-        .await
-        .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
+async fn follow_channel_inner(
+    url: &str,
+    db: &Db,
+    window_secs: i64,
+    cookies: Option<&str>,
+) -> AppResult<Channel> {
+    let mut listing =
+        ytdlp::fetch_channel_listing(url, max_entries_for_window(window_secs), cookies)
+            .await
+            .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
     let canonical_url = listing.canonical_url().unwrap_or_else(|| url.to_string());
     let name = listing.name();
@@ -331,7 +348,7 @@ async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult
     // (channel_db_id isn't known yet at follow time — fall back to per-video
     //  fetches without the DB-cache shortcut)
     let verified_at_follow =
-        enrich_timestamps(&mut listing.entries, external_id.as_deref(), -1, db).await;
+        enrich_timestamps(&mut listing.entries, external_id.as_deref(), -1, db, cookies).await;
 
     let channel_id = {
         let conn = db.0.lock().map_err(|e| AppError::Generic(e.to_string()))?;
@@ -408,13 +425,14 @@ async fn follow_channel_inner(url: &str, db: &Db, window_secs: i64) -> AppResult
 }
 
 #[tauri::command]
-async fn add_video(url: String, db: State<'_, Db>) -> AppResult<Video> {
+async fn add_video(url: String, app: AppHandle, db: State<'_, Db>) -> AppResult<Video> {
     let url = url.trim().to_string();
     if url.is_empty() {
         return Err(AppError::Generic("empty URL".into()));
     }
     validate_youtube_url(&url)?;
-    add_video_inner(&url, &db).await
+    let cb = cookies_browser(&app);
+    add_video_inner(&url, &db, cb.as_deref()).await
 }
 
 #[tauri::command]
@@ -430,12 +448,14 @@ async fn ingest_url(
     validate_youtube_url(&url)?;
 
     if ytdlp::looks_like_channel_url(&url) {
-        let ch = follow_channel_inner(&url, &db, lookback_secs(&app)).await?;
+        let cb = cookies_browser(&app);
+        let ch = follow_channel_inner(&url, &db, lookback_secs(&app), cb.as_deref()).await?;
         let _ = app.emit("channels-changed", ());
         return Ok(IngestResult::Channel(ch));
     }
 
-    let v = add_video_inner(&url, &db).await?;
+    let cb = cookies_browser(&app);
+    let v = add_video_inner(&url, &db, cb.as_deref()).await?;
     let _ = app.emit("videos-changed", ());
     Ok(IngestResult::Video(v))
 }
@@ -451,7 +471,8 @@ async fn follow_channel(
         return Err(AppError::Generic("empty URL".into()));
     }
     validate_youtube_url(&url)?;
-    let ch = follow_channel_inner(&url, &db, lookback_secs(&app)).await?;
+    let cb = cookies_browser(&app);
+    let ch = follow_channel_inner(&url, &db, lookback_secs(&app), cb.as_deref()).await?;
     let _ = app.emit("channels-changed", ());
     Ok(ch)
 }
@@ -540,7 +561,8 @@ async fn add_inbox_to_library(
     // inserting whatever the channel_video row already has: title,
     // thumbnail, URL, channel link. The user still gets the video into
     // their library; only the description ends up empty.
-    let v = match add_video_inner(&cv.url, &db).await {
+    let cb = cookies_browser(&app);
+    let v = match add_video_inner(&cv.url, &db, cb.as_deref()).await {
         Ok(v) => v,
         Err(_) => add_video_from_channel_video(&cv, &db)?,
     };
@@ -616,6 +638,7 @@ async fn enrich_timestamps(
     channel_external_id: Option<&str>,
     channel_db_id: i64,
     db: &Db,
+    cookies: Option<&str>,
 ) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let mut verified_now: HashSet<String> = HashSet::new();
@@ -681,12 +704,13 @@ async fn enrich_timestamps(
         tokio::task::JoinSet::new();
     for (idx, id, url) in need_fetch {
         let sem = sem.clone();
+        let cb2 = cookies.map(|s| s.to_string());
         tasks.spawn(async move {
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => return (idx, id, None),
             };
-            let ts = ytdlp::fetch_info(&url)
+            let ts = ytdlp::fetch_info(&url, cb2.as_deref())
                 .await
                 .ok()
                 .and_then(|info| info.upload_unix());
@@ -723,9 +747,11 @@ async fn catch_up_channel(
             .url
     };
 
-    let mut listing = ytdlp::fetch_channel_listing(&ch_url, max_entries_for_window(window))
-        .await
-        .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
+    let cb = cookies_browser(&app);
+    let mut listing =
+        ytdlp::fetch_channel_listing(&ch_url, max_entries_for_window(window), cb.as_deref())
+            .await
+            .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
 
     let channel_external_id: Option<String> = {
         let db = app.state::<Db>();
@@ -734,11 +760,13 @@ async fn catch_up_channel(
             .map_err(|e| AppError::Generic(format!("{e:#}")))?
             .and_then(|c| c.channel_id)
     };
+    let cb = cookies_browser(&app);
     let verified_ids = enrich_timestamps(
         &mut listing.entries,
         channel_external_id.as_deref(),
         channel_id,
         app.state::<Db>().inner(),
+        cb.as_deref(),
     )
     .await;
 
@@ -821,6 +849,12 @@ fn set_channel_lookback_days(days: i64, config: State<'_, AppConfig>) -> AppResu
 }
 
 #[tauri::command]
+fn set_cookies_browser(browser: Option<String>, state: State<'_, CookieBrowser>) {
+    let mut guard = state.0.lock().unwrap();
+    *guard = browser.filter(|b| !b.is_empty());
+}
+
+#[tauri::command]
 fn list_videos(db: State<'_, Db>) -> AppResult<Vec<Video>> {
     with_conn(&db, |conn| db::list_videos(conn))
 }
@@ -857,7 +891,8 @@ async fn list_video_formats(video_id: i64, app: AppHandle) -> AppResult<Vec<i64>
             .ok_or_else(|| AppError::Generic("video not found".into()))?
             .url
     };
-    let info = ytdlp::fetch_info(&url)
+    let cb = cookies_browser(&app);
+    let info = ytdlp::fetch_info(&url, cb.as_deref())
         .await
         .map_err(|e| AppError::Generic(format!("yt-dlp: {e:#}")))?;
     Ok(info.available_heights())
@@ -1415,9 +1450,11 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
         Option<std::collections::HashSet<String>>,
         anyhow::Result<ytdlp::ChannelListing>,
     )> = tokio::task::JoinSet::new();
+    let cb = cookies_browser(app);
     for ch in channels {
         let sem = semaphore.clone();
         let handle = app.clone();
+        let cb2 = cb.clone();
         tasks.spawn(async move {
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
@@ -1426,12 +1463,13 @@ async fn refresh_all_channels(app: &AppHandle) -> AppResult<RefreshSummary> {
             let url = ch.url.clone();
             let ext_id = ch.channel_id.clone();
             let ch_id = ch.id;
-            let result = ytdlp::fetch_channel_listing(&url, REFRESH_MAX_ENTRIES).await;
+            let result =
+                ytdlp::fetch_channel_listing(&url, REFRESH_MAX_ENTRIES, cb2.as_deref()).await;
             match result {
                 Ok(mut listing) => {
                     let db = handle.state::<Db>();
                     let verified =
-                        enrich_timestamps(&mut listing.entries, ext_id.as_deref(), ch_id, db.inner()).await;
+                        enrich_timestamps(&mut listing.entries, ext_id.as_deref(), ch_id, db.inner(), cb2.as_deref()).await;
                     (ch, Some(verified), Ok(listing))
                 }
                 Err(e) => (ch, None, Err(e)),
@@ -1628,6 +1666,7 @@ pub fn run() {
                 tasks: StdMutex::new(HashMap::new()),
                 gate: Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS)),
             });
+            app.manage(CookieBrowser(StdMutex::new(None)));
             spawn_background_refresh(app.handle().clone());
             Ok(())
         })
@@ -1648,6 +1687,7 @@ pub fn run() {
             refresh_channels,
             catch_up_channel,
             set_channel_lookback_days,
+            set_cookies_browser,
             list_videos,
             delete_video,
             restore_video,

@@ -508,18 +508,22 @@ impl ChannelEntry {
     }
 }
 
-pub async fn fetch_info(url: &str) -> Result<YtdlpInfo> {
-    let output = yt_dlp_command()
-        .args([
-            "--dump-single-json",
-            "--no-download",
-            "--no-warnings",
-            "--no-playlist",
-            "--skip-download",
-            "--socket-timeout",
-            "15",
-            url,
-        ])
+pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<YtdlpInfo> {
+    let mut cmd = yt_dlp_command();
+    cmd.args([
+        "--dump-single-json",
+        "--no-download",
+        "--no-warnings",
+        "--no-playlist",
+        "--skip-download",
+        "--socket-timeout",
+        "15",
+    ]);
+    if let Some(b) = cookies_browser.filter(|b| !b.is_empty()) {
+        cmd.args(["--cookies-from-browser", b]);
+    }
+    cmd.arg(url);
+    let output = cmd
         .output()
         .await
         .context("spawning yt-dlp (is it bundled or on PATH?)")?;
@@ -538,17 +542,21 @@ pub async fn fetch_info(url: &str) -> Result<YtdlpInfo> {
     Ok(info)
 }
 
-pub async fn fetch_channel_listing(url: &str, max_entries: usize) -> Result<ChannelListing> {
+pub async fn fetch_channel_listing(
+    url: &str,
+    max_entries: usize,
+    cookies_browser: Option<&str>,
+) -> Result<ChannelListing> {
     // Primary: the /videos tab, trusting its natural reverse-chronological
     // ordering. (An earlier multi-tab merge re-sorted by yt-dlp's approximate
     // dates, which are unreliable enough that legitimate /videos entries got
     // out-ordered and dropped — so we keep /videos as the authoritative list.)
-    let mut listing = fetch_single_tab(url, max_entries, "videos").await?;
+    let mut listing = fetch_single_tab(url, max_entries, "videos", cookies_browser).await?;
 
     // Also pull the /shorts tab in the background and flag those entries, so a
     // user preference can show or hide Shorts without a refetch. Non-fatal: a
     // channel may have no Shorts, or the tab may error — we just skip them then.
-    if let Ok(shorts) = fetch_single_tab(url, max_entries, "shorts").await {
+    if let Ok(shorts) = fetch_single_tab(url, max_entries, "shorts", cookies_browser).await {
         let have: std::collections::HashSet<String> = listing
             .entries
             .iter()
@@ -569,22 +577,27 @@ async fn fetch_single_tab(
     url: &str,
     max_entries: usize,
     tab: &str,
+    cookies_browser: Option<&str>,
 ) -> Result<ChannelListing> {
     let url = channel_tab_url(url, tab);
-    let output = yt_dlp_command()
-        .args([
-            "--dump-single-json",
-            "--flat-playlist",
-            "--no-warnings",
-            "--skip-download",
-            "--extractor-args",
-            "youtubetab:approximate_date",
-            "--playlist-end",
-            &max_entries.to_string(),
-            "--socket-timeout",
-            "20",
-            &url,
-        ])
+    let mut cmd = yt_dlp_command();
+    cmd.args([
+        "--dump-single-json",
+        "--flat-playlist",
+        "--no-warnings",
+        "--skip-download",
+        "--extractor-args",
+        "youtubetab:approximate_date",
+        "--playlist-end",
+        &max_entries.to_string(),
+        "--socket-timeout",
+        "20",
+    ]);
+    if let Some(b) = cookies_browser.filter(|b| !b.is_empty()) {
+        cmd.args(["--cookies-from-browser", b]);
+    }
+    cmd.arg(&url);
+    let output = cmd
         .output()
         .await
         .context("spawning yt-dlp for channel listing")?;
@@ -700,6 +713,7 @@ pub async fn download_video<F>(
     dest_dir: &Path,
     stem: &str,
     max_height: Option<i64>,
+    cookies_browser: Option<&str>,
     on_progress: F,
 ) -> Result<DownloadOutcome>
 where
@@ -753,6 +767,9 @@ where
         }
     };
 
+    if let Some(b) = cookies_browser.filter(|b| !b.is_empty()) {
+        cmd.args(["--cookies-from-browser", b]);
+    }
     cmd.arg(url)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
