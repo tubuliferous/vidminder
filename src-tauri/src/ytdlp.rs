@@ -516,6 +516,8 @@ pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<Ytdl
         "--no-warnings",
         "--no-playlist",
         "--skip-download",
+        "--no-check-formats", // don't verify each format is accessible — avoids
+                              // "Requested format not available" on metadata fetch
         "--socket-timeout",
         "15",
     ]);
