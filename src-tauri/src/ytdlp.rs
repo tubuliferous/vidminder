@@ -508,6 +508,36 @@ impl ChannelEntry {
     }
 }
 
+/// Turn raw yt-dlp stderr into a message a non-technical user can act on.
+fn friendly_ytdlp_error(stderr: &str) -> String {
+    let s = stderr.trim();
+    // Bot-detection / sign-in wall
+    if s.contains("Sign in to confirm")
+        || s.contains("confirm you're not a bot")
+        || s.contains("Use --cookies-from-browser")
+        || s.contains("Use --cookies")
+    {
+        return "YouTube is blocking this request. \
+            Open Settings → YouTube authentication and pick the browser \
+            where you're signed in to YouTube, then try again."
+            .to_string();
+    }
+    // Members-only or age-restricted content that cookies couldn't unlock
+    if s.contains("Join this channel")
+        || s.contains("members-only")
+        || s.contains("This video is available to this channel")
+    {
+        return "This video is members-only and can't be added.".to_string();
+    }
+    // Age-gate
+    if s.contains("Sign in to confirm your age") || s.contains("age-restricted") {
+        return "This video is age-restricted. Open Settings → YouTube authentication, \
+            pick the browser where you're signed in to YouTube, then try again."
+            .to_string();
+    }
+    s.to_string()
+}
+
 pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<YtdlpInfo> {
     let mut cmd = yt_dlp_command();
     cmd.args([
@@ -535,9 +565,8 @@ pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<Ytdl
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
-            "yt-dlp exited with status {}: {}",
-            output.status,
-            stderr.trim()
+            "yt-dlp: {}",
+            friendly_ytdlp_error(&stderr)
         ));
     }
 
@@ -609,9 +638,8 @@ async fn fetch_single_tab(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
-            "yt-dlp exited with status {}: {}",
-            output.status,
-            stderr.trim()
+            "yt-dlp: {}",
+            friendly_ytdlp_error(&stderr)
         ));
     }
 
@@ -835,10 +863,7 @@ where
     let status = child.wait().await.context("waiting for yt-dlp")?;
     let stderr_out = stderr_task.await.unwrap_or_default();
     if !status.success() {
-        return Err(anyhow!(
-            "yt-dlp download failed ({status}): {}",
-            stderr_out.trim()
-        ));
+        return Err(anyhow!("yt-dlp: {}", friendly_ytdlp_error(&stderr_out)));
     }
     on_progress(100.0);
 
