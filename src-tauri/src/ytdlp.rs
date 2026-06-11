@@ -516,10 +516,10 @@ pub async fn fetch_info(url: &str, cookies_browser: Option<&str>) -> Result<Ytdl
         "--no-warnings",
         "--no-playlist",
         "--skip-download",
-        // Maximally permissive selector so format selection never fails on a
-        // metadata-only fetch. Preference order: best combined progressive →
-        // best video → best audio → literally anything.
-        "--format", "b/bv*/ba/best",
+        "--no-check-formats",
+        // Allow metadata extraction even when yt-dlp can't find a downloadable
+        // format (e.g. DRM-gated content visible to authenticated users).
+        "--ignore-no-formats-error",
         "--socket-timeout",
         "15",
     ]);
