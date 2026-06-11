@@ -1526,11 +1526,15 @@ function App() {
     const onDragEnter = (e: DragEvent) => {
       if (!e.dataTransfer) return;
       if (isInAppDrag(e)) return;
-      const types = Array.from(e.dataTransfer.types || []);
-      if (!types.some((t) => t === "text/uri-list" || t === "text/plain")) return;
+      // Always prevent default for external drags — if we don't, WKWebView will
+      // navigate to or render whatever is dropped (images, HTML, files, etc.).
       e.preventDefault();
-      dragDepth.current += 1;
-      setDragHover(true);
+      const types = Array.from(e.dataTransfer.types || []);
+      const hasUrl = types.some((t) => t === "text/uri-list" || t === "text/plain");
+      if (hasUrl) {
+        dragDepth.current += 1;
+        setDragHover(true);
+      }
     };
     const onDragOver = (e: DragEvent) => {
       if (!e.dataTransfer) return;
@@ -1547,41 +1551,49 @@ function App() {
         }
         return;
       }
-      const types = Array.from(e.dataTransfer.types || []);
-      if (!types.some((t) => t === "text/uri-list" || t === "text/plain")) return;
+      // Always prevent default — any unhandled external drag lets WKWebView
+      // take over and navigate/display the content inline.
       e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
+      const types = Array.from(e.dataTransfer.types || []);
+      const hasUrl = types.some((t) => t === "text/uri-list" || t === "text/plain");
+      e.dataTransfer.dropEffect = hasUrl ? "copy" : "none";
     };
     const onDragLeave = () => {
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) setDragHover(false);
     };
     const onDrop = (e: DragEvent) => {
+      // Always prevent default first — never let WKWebView handle any drop.
+      e.preventDefault();
       if (isInAppDrag(e) && !isInboxRowDrag(e)) {
         // Sidebar drop targets have already handled their own drops by now.
-        // Swallow everything else — letting the default run would make
-        // WKWebView navigate to the dragged video's URL in-place.
-        e.preventDefault();
+        // Swallow everything else to block WKWebView navigation.
         return;
       }
       // A sidebar tag node handles its own URL drops (ingest + auto-tag).
-      // The React handler on the row runs before this window handler, so by
-      // the time we get here it's already done — just reset overlay state.
       const target = e.target as HTMLElement | null;
       if (target?.closest('[data-url-drop-target="true"]')) {
         dragDepth.current = 0;
         setDragHover(false);
         return;
       }
-      e.preventDefault();
       dragDepth.current = 0;
       setDragHover(false);
       const url = extractUrlFromDrop(e);
       if (url) {
         ingest(url);
-      } else {
-        pushToast({ kind: "err", text: "No URL found in the drop" });
+        return;
       }
+      // Show a helpful message for common non-URL drops (images, files, etc.)
+      const types = Array.from(e.dataTransfer?.types || []);
+      const isFileOrImage =
+        types.includes("Files") || types.some((t) => t.startsWith("image/"));
+      pushToast({
+        kind: "err",
+        text: isFileOrImage
+          ? "VidMinder only accepts YouTube URLs — drag a video link here, not an image or file"
+          : "Drop a YouTube video or channel URL to add it",
+      });
     };
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
