@@ -15,8 +15,8 @@ export type Settings = {
   /// downloads. 720 is the default; 0 means audio-only; 99999 means "best
   /// available". The per-video pickers can override this per download.
   offlineMaxHeight: number;
-  /// Whether YouTube Shorts appear in the inbox and library lists. Shorts are
-  /// always fetched in the background; this only governs their visibility.
+  /// Whether YouTube Shorts appear in channel feeds and the inbox. Shorts
+  /// already in the library are always visible regardless of this setting.
   /// Off by default.
   showShorts: boolean;
   /// In a channel view, whether videos already in your library are pulled out

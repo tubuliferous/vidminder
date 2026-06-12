@@ -208,11 +208,11 @@ export function SettingsDialog({
               className="mt-0.5 w-4 h-4 accent-accent"
             />
             <span>
-              <span className="text-[13px] block">Show Shorts in lists</span>
-              <span className="text-[11.5px] text-ink-faint">
-                YouTube Shorts are always fetched in the background; turn this on to
-                show them in the inbox and library. They never count toward the “new”
-                badge.
+              <span className=”text-[13px] block”>Show Shorts in channel feeds</span>
+              <span className=”text-[11.5px] text-ink-faint”>
+                Shorts you add directly to your library are always shown. Turn this on
+                to also show them in channel feeds and the inbox. They never count
+                toward the “new” badge.
               </span>
             </span>
           </label>

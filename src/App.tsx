@@ -1873,8 +1873,9 @@ function App() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const matched = videos.filter((v) => {
-      // Shorts are fetched but hidden unless the preference is on.
-      if (v.is_short && !settings.showShorts) return false;
+      // In channel views, hide Shorts unless the preference is on. In all other
+      // library views, directly-added Shorts are always shown.
+      if (v.is_short && !settings.showShorts && filter.kind === "channel") return false;
       switch (filter.kind) {
         case "all":
           break;
