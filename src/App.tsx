@@ -1524,12 +1524,11 @@ function App() {
     const isInboxRowDrag = (e: DragEvent) =>
       Array.from(e.dataTransfer?.types || []).includes(INBOX_DRAG_MIME);
     const onDragEnter = (e: DragEvent) => {
-      if (!e.dataTransfer) return;
       if (isInAppDrag(e)) return;
       // Always prevent default for external drags — if we don't, WKWebView will
       // navigate to or render whatever is dropped (images, HTML, files, etc.).
       e.preventDefault();
-      const types = Array.from(e.dataTransfer.types || []);
+      const types = Array.from(e.dataTransfer?.types || []);
       const hasUrl = types.some((t) => t === "text/uri-list" || t === "text/plain");
       if (hasUrl) {
         dragDepth.current += 1;
@@ -1537,7 +1536,6 @@ function App() {
       }
     };
     const onDragOver = (e: DragEvent) => {
-      if (!e.dataTransfer) return;
       if (isInAppDrag(e)) {
         // If an inner drop target (tag folder, sidebar slot) already claimed
         // this event, leave its dropEffect alone. Otherwise we MUST cancel
@@ -1547,16 +1545,17 @@ function App() {
           e.preventDefault();
           // Inbox/channel rows may be dropped anywhere in the window to add
           // them; other in-app drags show the no-drop cursor here.
-          e.dataTransfer.dropEffect = isInboxRowDrag(e) ? "copy" : "none";
+          if (e.dataTransfer)
+            e.dataTransfer.dropEffect = isInboxRowDrag(e) ? "copy" : "none";
         }
         return;
       }
       // Always prevent default — any unhandled external drag lets WKWebView
       // take over and navigate/display the content inline.
       e.preventDefault();
-      const types = Array.from(e.dataTransfer.types || []);
+      const types = Array.from(e.dataTransfer?.types || []);
       const hasUrl = types.some((t) => t === "text/uri-list" || t === "text/plain");
-      e.dataTransfer.dropEffect = hasUrl ? "copy" : "none";
+      if (e.dataTransfer) e.dataTransfer.dropEffect = hasUrl ? "copy" : "none";
     };
     const onDragLeave = () => {
       dragDepth.current = Math.max(0, dragDepth.current - 1);

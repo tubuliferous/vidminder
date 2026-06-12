@@ -1614,6 +1614,28 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .setup(|app| {
+            // Create the main window programmatically so we can attach a
+            // navigation guard. The guard is the last-resort defence against
+            // WKWebView rendering an external URL that was accidentally
+            // dropped or otherwise triggered — JS preventDefault handles it
+            // first, but this catches anything that slips through.
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App(std::path::PathBuf::from("/")),
+            )
+            .title("VidMinder")
+            .inner_size(1180.0, 760.0)
+            .min_inner_size(820.0, 540.0)
+            .disable_drag_drop_handler()
+            .on_navigation(|url| {
+                matches!(url.scheme(), "tauri" | "asset" | "ipc")
+                    || url
+                        .host_str()
+                        .map_or(false, |h| h == "localhost" || h == "tauri.localhost")
+            })
+            .build()?;
+
             // On Linux & on Windows-dev, URL scheme registration must be done
             // at runtime. Production Windows installers (MSI/NSIS) handle it
             // via the bundle config. macOS handles it via Info.plist at bundle
