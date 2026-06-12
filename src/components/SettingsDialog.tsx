@@ -208,11 +208,11 @@ export function SettingsDialog({
               className="mt-0.5 w-4 h-4 accent-accent"
             />
             <span>
-              <span className=”text-[13px] block”>Show Shorts in channel feeds</span>
-              <span className=”text-[11.5px] text-ink-faint”>
+              <span className="text-[13px] block">Show Shorts in channel feeds</span>
+              <span className="text-[11.5px] text-ink-faint">
                 Shorts you add directly to your library are always shown. Turn this on
                 to also show them in channel feeds and the inbox. They never count
-                toward the “new” badge.
+                toward the "new" badge.
               </span>
             </span>
           </label>
@@ -232,8 +232,8 @@ export function SettingsDialog({
               </span>
               <span className="text-[11.5px] text-ink-faint">
                 By default a channel's videos already in your library are
-                intercalated into the upload list with an “In list” badge. Turn
-                this on to pull them into their own “In your list” section
+                intercalated into the upload list with an "In list" badge. Turn
+                this on to pull them into their own "In your list" section
                 instead.
               </span>
             </span>
