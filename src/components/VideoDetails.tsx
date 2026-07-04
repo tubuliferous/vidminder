@@ -220,7 +220,7 @@ export function VideoDetails({
         <div className="pt-2 border-t border-line">
           <button
             onClick={onRequestDelete}
-            className="text-[12px] text-ink-faint hover:text-danger transition"
+            className="w-full text-[12.5px] font-medium py-2 px-3 rounded-md bg-danger text-danger-ink shadow-sm hover:brightness-110 active:brightness-95 transition"
           >
             Remove from library
           </button>
@@ -294,7 +294,7 @@ function OfflineSection({
           <span>Downloading… {pct}%</span>
           <button
             onClick={() => onCancelDownload(video)}
-            className="text-ink-faint hover:text-danger transition"
+            className="text-[12px] font-medium px-2.5 py-0.5 rounded-md bg-danger text-danger-ink shadow-sm hover:brightness-110 active:brightness-95 transition"
           >
             Cancel
           </button>
@@ -321,7 +321,7 @@ function OfflineSection({
           </button>
           <button
             onClick={() => onDeleteOffline(video)}
-            className="text-[12px] px-3 rounded-md border border-line text-ink-faint hover:text-danger transition"
+            className="text-[12.5px] font-medium px-3 rounded-md bg-danger text-danger-ink shadow-sm hover:brightness-110 active:brightness-95 transition"
           >
             Remove
           </button>

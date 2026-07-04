@@ -19,6 +19,7 @@ export default {
         accent: "rgb(var(--color-accent) / <alpha-value>)",
         "accent-dim": "rgb(var(--color-accent-dim) / <alpha-value>)",
         danger: "rgb(var(--color-danger) / <alpha-value>)",
+        "danger-ink": "rgb(var(--color-danger-ink) / <alpha-value>)",
       },
       // v3's preflight defaults a bare `border` to gray-200; v4 defaulted to
       // currentColor. Match v4 so any uncolored border stays faithful to how

@@ -246,7 +246,7 @@ export function MultiVideoDetails({
                   return;
                 onBatchRemoveDownloads(removableDownloads);
               }}
-              className="mt-2 text-[12px] text-ink-faint hover:text-danger transition"
+              className="mt-2 w-full text-[12.5px] font-medium py-2 px-3 rounded-md bg-danger text-danger-ink shadow-sm hover:brightness-110 active:brightness-95 transition"
             >
               Remove {removableDownloads.length}{" "}
               {removableDownloads.length === 1 ? "download" : "downloads"}
@@ -387,7 +387,7 @@ export function MultiVideoDetails({
                 return;
               onDeleteAll(videos);
             }}
-            className="text-[12px] text-ink-faint hover:text-danger transition"
+            className="w-full text-[12.5px] font-medium py-2 px-3 rounded-md bg-danger text-danger-ink shadow-sm hover:brightness-110 active:brightness-95 transition"
           >
             Remove {n} from library
           </button>

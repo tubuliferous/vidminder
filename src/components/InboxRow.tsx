@@ -12,6 +12,11 @@ type Props = {
   cv: ChannelVideo;
   busy: boolean;
   showChannelName?: boolean;
+  /// When set, single-clicking the row selects it (showing its details in the
+  /// right sidebar). `selected` drives the highlight. Optional so the global
+  /// inbox view — which has no details panel — can omit it.
+  selected?: boolean;
+  onSelect?: () => void;
   onAdd: () => void;
   onDismiss: () => void;
   onOpen: () => void;
@@ -22,6 +27,8 @@ export function InboxRow({
   cv,
   busy,
   showChannelName = true,
+  selected = false,
+  onSelect,
   onAdd,
   onDismiss,
   onOpen,
@@ -82,11 +89,14 @@ export function InboxRow({
         onDragStateChange?.(true);
       }}
       onDragEnd={() => onDragStateChange?.(false)}
+      onClick={onSelect}
       onDoubleClick={onOpen}
-      title="Double-click anywhere to play in browser · drag onto a tag to add it there"
+      title="Click for details · double-click anywhere to play in browser · drag onto a tag to add it there"
       className={
         "flex gap-3 p-2.5 rounded-md border transition group cursor-pointer select-none " +
-        (cv.in_library
+        (selected
+          ? "bg-surface-2 border-accent ring-1 ring-accent"
+          : cv.in_library
           ? "bg-surface/40 border-line/40 border-l-2 border-l-accent/60 hover:border-line-soft"
           : showNewBadge
           ? "bg-surface border-line hover:border-line-soft"

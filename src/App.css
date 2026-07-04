@@ -20,6 +20,10 @@
   --color-accent: 106 169 255;
   --color-accent-dim: 42 74 122;
   --color-danger: 255 122 138;
+  /* Text color for content sitting ON a solid danger fill. Dark theme's
+     danger is a light salmon (needs dark text); light theme's is a deep red
+     (needs white text). */
+  --color-danger-ink: 40 12 18;
 }
 
 :root[data-theme="dark"] {
@@ -34,6 +38,7 @@
   --color-accent: 106 169 255;
   --color-accent-dim: 42 74 122;
   --color-danger: 255 122 138;
+  --color-danger-ink: 40 12 18;
 }
 
 :root[data-theme="light"] {
@@ -48,6 +53,7 @@
   --color-accent: 42 110 209;
   --color-accent-dim: 212 227 247;
   --color-danger: 207 47 74;
+  --color-danger-ink: 255 255 255;
 }
 
 :root {

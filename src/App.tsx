@@ -17,6 +17,7 @@ import { VideoCard } from "./components/VideoCard";
 import { VideoDetails } from "./components/VideoDetails";
 import { MultiVideoDetails } from "./components/MultiVideoDetails";
 import { ChannelDetails } from "./components/ChannelDetails";
+import { ChannelVideoDetails } from "./components/ChannelVideoDetails";
 import { InboxView } from "./components/InboxView";
 import { InboxRow } from "./components/InboxRow";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -153,6 +154,11 @@ function App() {
   // size 1 — the rest of the code branches on selectedIds.size.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [anchorId, setAnchorId] = useState<number | null>(null);
+  // A channel-feed video (not yet in the library) selected for the details
+  // panel. Mutually exclusive with library selection: selecting a library
+  // video clears this, and selecting an inbox row clears selectedIds. Stored
+  // by id so the panel tracks live updates (e.g. in_library flipping on Add).
+  const [selectedInboxId, setSelectedInboxId] = useState<number | null>(null);
   // While the user is shift+mousedown-dragging through the list, this holds
   // the row they started on so each newly-entered row extends the range.
   const dragRangeAnchor = useRef<number | null>(null);
@@ -352,6 +358,38 @@ function App() {
   useEffect(() => {
     api.setCookiesBrowser(settings.cookiesBrowser).catch(() => {});
   }, [settings.cookiesBrowser]);
+
+  // Thumbnails are remote <img src=…> hitting YouTube's CDN. When the machine
+  // sleeps, any in-flight (or subsequently attempted) load fails and WKWebView
+  // marks that <img> permanently broken — it never retries when the network
+  // returns, leaving a wall of broken-image placeholders after wake. Whenever
+  // we regain focus / visibility / connectivity, nudge every broken image to
+  // re-fetch by clearing and restoring its src on the next frame.
+  useEffect(() => {
+    const reviveBrokenImages = () => {
+      document.querySelectorAll("img").forEach((img) => {
+        // complete && naturalWidth === 0 is the canonical "load failed" test.
+        if (img.complete && img.naturalWidth === 0 && img.src) {
+          const src = img.src;
+          img.src = "";
+          requestAnimationFrame(() => {
+            img.src = src;
+          });
+        }
+      });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reviveBrokenImages();
+    };
+    window.addEventListener("focus", reviveBrokenImages);
+    window.addEventListener("online", reviveBrokenImages);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", reviveBrokenImages);
+      window.removeEventListener("online", reviveBrokenImages);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // Backend events (e.g. background polling brought in new inbox items)
   useEffect(() => {
@@ -667,7 +705,21 @@ function App() {
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
     setAnchorId(null);
+    setSelectedInboxId(null);
   }, []);
+
+  // Single-click an inbox / channel-feed row → show its details on the right.
+  // Clears any library selection so the two panels never fight.
+  const handleInboxSelect = useCallback((cv: ChannelVideo) => {
+    setSelectedIds(new Set());
+    setAnchorId(null);
+    setSelectedInboxId(cv.id);
+  }, []);
+
+  // Mutual exclusion: any library selection wins, dropping the inbox panel.
+  useEffect(() => {
+    if (selectedIds.size > 0) setSelectedInboxId(null);
+  }, [selectedIds]);
 
   const handleIngestResult = useCallback(
     async (result: IngestResult) => {
@@ -1656,6 +1708,17 @@ function App() {
   );
   const selectedVideo = selectedVideos.length === 1 ? selectedVideos[0] : null;
 
+  // The channel-feed video backing the inbox details panel. Derived from the
+  // live inbox array so its in_library / dismissed state stays current; resolves
+  // to null once the item leaves the inbox entirely.
+  const selectedInbox = useMemo(
+    () =>
+      selectedInboxId == null
+        ? null
+        : inbox.find((cv) => cv.id === selectedInboxId) ?? null,
+    [selectedInboxId, inbox]
+  );
+
   // Decide what a row click does based on modifier keys. `orderedIds` is the
   // current visible ordering (matters for shift-click range selects).
   const handleVideoSelect = useCallback(
@@ -2603,6 +2666,8 @@ function App() {
                               cv={cv}
                               busy={inboxBusy.has(cv.id)}
                               showChannelName={false}
+                              selected={selectedInboxId === cv.id}
+                              onSelect={() => handleInboxSelect(cv)}
                               onAdd={wrapInbox(cv, handleAddFromInbox)}
                               onDismiss={wrapInbox(cv, handleDismissInboxItem)}
                               onOpen={() => handleOpenInboxItem(cv)}
@@ -2778,6 +2843,16 @@ function App() {
                       onCancelDownload={(v) => handleCancelDownload(v.id)}
                       onPlayOffline={handlePlayOffline}
                       onDeleteOffline={(v) => handleDeleteOffline(v.id)}
+                    />
+                  </div>
+                ) : selectedInbox ? (
+                  <div className="w-full">
+                    <ChannelVideoDetails
+                      cv={selectedInbox}
+                      busy={inboxBusy.has(selectedInbox.id)}
+                      onAdd={() => handleAddFromInbox(selectedInbox)}
+                      onDismiss={() => handleDismissInboxItem(selectedInbox)}
+                      onOpen={() => handleOpenInboxItem(selectedInbox)}
                     />
                   </div>
                 ) : filter.kind === "channel" && currentChannel ? (

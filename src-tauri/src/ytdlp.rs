@@ -773,8 +773,15 @@ where
         cmd.args(["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]);
         "Audio".to_string()
     } else {
+        // The trailing `/bv*+ba/b` is an uncapped last resort: if this video
+        // simply has no stream at or below `h` (e.g. its lowest rendition is
+        // still above the requested cap), grab the best it offers instead of
+        // erroring out. Matters most for batch downloads, where one shared
+        // cap is applied across videos of very different native resolutions.
         let selector = match max_height {
-            Some(h) if h > 0 => format!("bv*[height<={h}]+ba/b[height<={h}]"),
+            Some(h) if h > 0 => {
+                format!("bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b")
+            }
             _ => "bv*+ba/b".to_string(),
         };
         cmd.args(["-f", &selector, "--merge-output-format", "mp4"]);
