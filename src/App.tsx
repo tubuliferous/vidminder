@@ -2522,6 +2522,33 @@ function App() {
                     : "no new uploads"}
                 </span>
               </div>
+              {/* Where already-added videos sit in the feed: intercalated by
+                  date (badged) or pulled out into the "In your list" section.
+                  Same preference as the Settings toggle, surfaced here. */}
+              <div
+                className="flex items-center rounded-md border border-line overflow-hidden"
+                title='Show videos already in your list mixed into the feed by date, or separated into their own "In your list" section'
+              >
+                {([
+                  { separate: false, label: "Mixed" },
+                  { separate: true, label: "Separate" },
+                ] as const).map(({ separate, label }) => (
+                  <button
+                    key={label}
+                    onClick={() =>
+                      updateSettings({ separateAddedInChannels: separate })
+                    }
+                    className={
+                      "text-[11px] px-2 py-1 transition " +
+                      (settings.separateAddedInChannels === separate
+                        ? "bg-surface-2 text-ink font-medium"
+                        : "text-ink-faint hover:text-ink")
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <button
                 onClick={() => handleResurfaceChannel(currentChannel.id)}
                 disabled={resurfacingChannelId !== null}

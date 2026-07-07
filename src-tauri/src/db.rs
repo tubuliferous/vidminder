@@ -906,6 +906,8 @@ pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<Channel>> {
                          AND cv.upload_timestamp IS NOT NULL
                          AND cv.upload_timestamp >= (strftime('%s', 'now') - 14 * 86400)
                          AND cv.url NOT IN (SELECT url FROM videos)
+                         AND cv.video_external_id NOT IN
+                             (SELECT video_id FROM videos WHERE video_id IS NOT NULL)
                          AND cv.is_short = 0) AS inbox_count
                FROM channels c
                WHERE c.id = ?1"#,
@@ -936,7 +938,9 @@ pub fn list_channels(conn: &Connection) -> Result<Vec<Channel>> {
                      AND cv.seen_at IS NULL
                      AND cv.upload_timestamp IS NOT NULL
                      AND cv.upload_timestamp >= (strftime('%s', 'now') - 14 * 86400)
-                     AND cv.url NOT IN (SELECT url FROM videos)) AS inbox_count
+                     AND cv.url NOT IN (SELECT url FROM videos)
+                     AND cv.video_external_id NOT IN
+                         (SELECT video_id FROM videos WHERE video_id IS NOT NULL)) AS inbox_count
            FROM channels c
            ORDER BY c.name COLLATE NOCASE"#,
     )?;
@@ -1142,7 +1146,9 @@ pub fn catch_up_channel(
              AND auto_dismissed_at_follow = 1
              AND upload_timestamp IS NOT NULL
              AND upload_timestamp >= ?2
-             AND url NOT IN (SELECT url FROM videos)"#,
+             AND url NOT IN (SELECT url FROM videos)
+             AND video_external_id NOT IN
+                 (SELECT video_id FROM videos WHERE video_id IS NOT NULL)"#,
         params![channel_id, cutoff_unix],
     )?;
     Ok(n as i64)
@@ -1157,7 +1163,9 @@ pub fn catch_up_all_channels(conn: &Connection, cutoff_unix: i64) -> Result<i64>
              AND auto_dismissed_at_follow = 1
              AND upload_timestamp IS NOT NULL
              AND upload_timestamp >= ?1
-             AND url NOT IN (SELECT url FROM videos)"#,
+             AND url NOT IN (SELECT url FROM videos)
+             AND video_external_id NOT IN
+                 (SELECT video_id FROM videos WHERE video_id IS NOT NULL)"#,
         params![cutoff_unix],
     )?;
     Ok(n as i64)
@@ -1178,19 +1186,27 @@ pub fn resurface_channel_recent(
            WHERE channel_id = ?1
              AND upload_timestamp IS NOT NULL
              AND upload_timestamp >= ?2
-             AND url NOT IN (SELECT url FROM videos)"#,
+             AND url NOT IN (SELECT url FROM videos)
+             AND video_external_id NOT IN
+                 (SELECT video_id FROM videos WHERE video_id IS NOT NULL)"#,
         params![channel_id, cutoff_unix],
     )?;
     Ok(n as i64)
 }
 
+/// Library membership is matched by URL *or* YouTube video id: the library
+/// stores yt-dlp's canonical webpage_url, which can differ from the RSS feed's
+/// watch URL (e.g. /shorts/<id> vs watch?v=<id>, or a video added via a
+/// youtu.be link) — exact-URL matching alone misses those.
 pub fn list_inbox(conn: &Connection) -> Result<Vec<ChannelVideo>> {
     let mut stmt = conn.prepare(
         r#"SELECT cv.id, cv.channel_id, c.name AS channel_name, c.url AS channel_url,
                   cv.video_external_id, cv.url, cv.title, cv.thumbnail_url,
                   cv.duration, cv.upload_date, cv.upload_timestamp,
                   cv.first_seen_at, cv.seen_at, cv.dismissed, cv.is_short,
-                  (cv.url IN (SELECT url FROM videos)) AS in_library
+                  (cv.url IN (SELECT url FROM videos)
+                   OR cv.video_external_id IN
+                      (SELECT video_id FROM videos WHERE video_id IS NOT NULL)) AS in_library
            FROM channel_videos cv
            JOIN channels c ON c.id = cv.channel_id
            WHERE cv.dismissed = 0
@@ -1209,7 +1225,9 @@ pub fn count_inbox(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row(
         r#"SELECT COUNT(*) FROM channel_videos cv
            WHERE cv.dismissed = 0
-             AND cv.url NOT IN (SELECT url FROM videos)"#,
+             AND cv.url NOT IN (SELECT url FROM videos)
+             AND cv.video_external_id NOT IN
+                 (SELECT video_id FROM videos WHERE video_id IS NOT NULL)"#,
         [],
         |r| r.get::<_, i64>(0),
     )?)
@@ -1245,7 +1263,9 @@ pub fn get_channel_video(conn: &Connection, id: i64) -> Result<Option<ChannelVid
                       cv.video_external_id, cv.url, cv.title, cv.thumbnail_url,
                       cv.duration, cv.upload_date, cv.upload_timestamp,
                       cv.first_seen_at, cv.dismissed, cv.is_short,
-                      (cv.url IN (SELECT url FROM videos)) AS in_library
+                      (cv.url IN (SELECT url FROM videos)
+                       OR cv.video_external_id IN
+                          (SELECT video_id FROM videos WHERE video_id IS NOT NULL)) AS in_library
                FROM channel_videos cv
                JOIN channels c ON c.id = cv.channel_id
                WHERE cv.id = ?1"#,
