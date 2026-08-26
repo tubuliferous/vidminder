@@ -94,9 +94,12 @@ jobs:
           # mangled by the resource bundler. The interpreter is run by its real
           # versioned name.
           find src-tauri/runtime/python -type l -delete
-          # yt-dlp + certifi are py3-none-any wheels, so the host's python3 can
-          # produce a pylib the bundled (target-arch) interpreter loads fine.
-          python3 -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp certifi
+          # yt-dlp + yt-dlp-ejs + certifi are py3-none-any wheels, so the host's
+          # python3 can produce a pylib the bundled (target-arch) interpreter
+          # loads fine. yt-dlp-ejs is REQUIRED: without its JS challenge solver
+          # (run via deno/node), YouTube rejects downloads with "The page needs
+          # to be reloaded".
+          python3 -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp yt-dlp-ejs certifi
 
       - name: Setup Python runtime (Windows)
         if: matrix.platform.runner == 'windows-latest'
@@ -109,7 +112,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "src-tauri/runtime" | Out-Null
           Invoke-WebRequest -Uri $URL -OutFile "$env:RUNNER_TEMP/py.tar.gz"
           tar -xzf "$env:RUNNER_TEMP/py.tar.gz" -C src-tauri/runtime
-          python -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp certifi
+          python -m pip install --target src-tauri/runtime/pylib --no-compile --upgrade yt-dlp yt-dlp-ejs certifi
 
       - name: Download ffmpeg sidecar (Unix)
         if: matrix.platform.runner != 'windows-latest'
@@ -124,6 +127,32 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
           Invoke-WebRequest -Uri "${{ matrix.platform.ffmpeg_url }}" -OutFile "src-tauri/binaries/${{ matrix.platform.ffmpeg_name }}"
+
+      # JS runtime for yt-dlp's JS-challenge solver (yt-dlp-ejs): without a
+      # runtime on PATH, YouTube rejects most downloads with "The page needs to
+      # be reloaded". Deno's release assets are named by the same target
+      # triples we build for. Keep DENO_VERSION in lock-step with
+      # scripts/install-sidecar.mjs.
+      - name: Download deno sidecar (Unix)
+        if: matrix.platform.runner != 'windows-latest'
+        run: |
+          set -euo pipefail
+          DENO_VERSION=2.8.0
+          TARGET="${{ matrix.platform.target }}"
+          curl -L --fail -o /tmp/deno.zip "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${TARGET}.zip"
+          unzip -o /tmp/deno.zip -d src-tauri/binaries
+          mv "src-tauri/binaries/deno" "src-tauri/binaries/deno-${TARGET}"
+          chmod +x "src-tauri/binaries/deno-${TARGET}"
+
+      - name: Download deno sidecar (Windows)
+        if: matrix.platform.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          $DENO_VERSION = "2.8.0"
+          $TARGET = "${{ matrix.platform.target }}"
+          Invoke-WebRequest -Uri "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-$TARGET.zip" -OutFile "$env:RUNNER_TEMP/deno.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP/deno.zip" -DestinationPath "src-tauri/binaries" -Force
+          Move-Item -Force "src-tauri/binaries/deno.exe" "src-tauri/binaries/deno-$TARGET.exe"
 
       - name: Setup Node
         uses: actions/setup-node@v4

@@ -14,9 +14,14 @@
 //      Python runtime to a temp dir on every single call). The relocatable
 //      interpreter starts in ~0.3s instead.
 //
+//   3. deno — a second externalBin sidecar. yt-dlp's JS-challenge solver
+//      (yt-dlp-ejs) needs an external JS runtime; without one on PATH YouTube
+//      rejects most downloads with "The page needs to be reloaded". ytdlp.rs
+//      puts the sidecar dir on the child's PATH so yt-dlp discovers it.
+//
 // Run with: `node scripts/install-sidecar.mjs`  (npm run install-sidecar)
 
-import { mkdirSync, existsSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, chmodSync, rmSync, renameSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { platform, arch } from "node:os";
 import { dirname, join } from "node:path";
@@ -72,6 +77,42 @@ function installFfmpeg() {
   console.log(`Saved ffmpeg sidecar to ${outPath}`);
 }
 
+// ---- deno sidecar ---------------------------------------------------------
+
+// Deno's release assets are named by the same target triples we build for.
+// Keep DENO_VERSION in lock-step with .github/workflows/release.yml.
+const DENO_VERSION = "2.8.0";
+function denoUrl() {
+  return (
+    `https://github.com/denoland/deno/releases/download/` +
+    `v${DENO_VERSION}/deno-${triple}.zip`
+  );
+}
+
+function installDeno() {
+  const outPath = join(binDir, `deno-${triple}${ext}`);
+  if (existsSync(outPath)) {
+    console.log(`deno sidecar already present: ${outPath}`);
+    return;
+  }
+  mkdirSync(binDir, { recursive: true });
+  const zip = join(binDir, "deno.zip");
+  const url = denoUrl();
+  console.log(`Downloading deno from ${url}…`);
+  execSync(`curl -L --fail -o "${zip}" "${url}"`, { stdio: "inherit" });
+  // The zip holds a single `deno[.exe]`. bsdtar (macOS/Windows) extracts zip
+  // archives; GNU tar doesn't, so use unzip on Linux.
+  const extract =
+    p === "linux"
+      ? `unzip -o "${zip}" -d "${binDir}"`
+      : `tar -xf "${zip}" -C "${binDir}"`;
+  execSync(extract, { stdio: "inherit" });
+  rmSync(zip, { force: true });
+  renameSync(join(binDir, `deno${ext}`), outPath);
+  if (p !== "win32") chmodSync(outPath, 0o755);
+  console.log(`Saved deno sidecar to ${outPath}`);
+}
+
 // ---- Python + yt-dlp runtime ---------------------------------------------
 
 function pbsUrl() {
@@ -103,14 +144,18 @@ function installRuntime() {
   execSync(`tar -xzf "${tgz}" -C "${runtimeDir}"`, { stdio: "inherit" });
   rmSync(tgz, { force: true });
 
-  // 2. yt-dlp + certifi into runtime/pylib (pure-Python, arch-independent). We
-  //    run it via `python -m yt_dlp` with PYTHONPATH=pylib. certifi gives the
-  //    relocatable interpreter a CA bundle so HTTPS verification works. Do this
-  //    before stripping symlinks, since the bundled python3 is one of them.
+  // 2. yt-dlp + yt-dlp-ejs + certifi into runtime/pylib (pure-Python,
+  //    arch-independent). We run it via `python -m yt_dlp` with
+  //    PYTHONPATH=pylib. certifi gives the relocatable interpreter a CA bundle
+  //    so HTTPS verification works. yt-dlp-ejs is REQUIRED: it holds the JS
+  //    challenge solver (run via deno/node) that YouTube's anti-bot check
+  //    demands — without it downloads fail with "The page needs to be
+  //    reloaded". Do this before stripping symlinks, since the bundled python3
+  //    is one of them.
   const py = pythonExe();
-  console.log("Installing yt-dlp + certifi into runtime/pylib…");
+  console.log("Installing yt-dlp + yt-dlp-ejs + certifi into runtime/pylib…");
   execSync(
-    `"${py}" -m pip install --target "${pylibDir}" --no-compile --upgrade yt-dlp certifi`,
+    `"${py}" -m pip install --target "${pylibDir}" --no-compile --upgrade yt-dlp yt-dlp-ejs certifi`,
     { stdio: "inherit" }
   );
 
@@ -124,4 +169,5 @@ function installRuntime() {
 }
 
 installFfmpeg();
+installDeno();
 installRuntime();

@@ -117,6 +117,9 @@ fn yt_dlp_command() -> Command {
 /// PATH-resolved ffmpeg — needed to merge separate video+audio streams for any
 /// resolution above ~720p — silently goes missing and downloads end up as two
 /// unmerged fragments. This makes ffmpeg (and a PATH yt-dlp) discoverable.
+/// The sidecar dir also holds the bundled deno, which yt-dlp's JS-challenge
+/// solver (yt-dlp-ejs) looks up on PATH — without a JS runtime YouTube rejects
+/// most downloads with "The page needs to be reloaded".
 #[cfg(not(target_os = "windows"))]
 fn augment_path(cmd: &mut Command) {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
@@ -141,8 +144,22 @@ fn augment_path(cmd: &mut Command) {
     }
 }
 
+/// On Windows there are no conventional extra bin dirs to add, but the sidecar
+/// dir (bundled ffmpeg + deno, next to the exe) still has to go on the child's
+/// PATH — yt-dlp's JS-challenge solver finds deno only via PATH lookup.
 #[cfg(target_os = "windows")]
-fn augment_path(_cmd: &mut Command) {}
+fn augment_path(cmd: &mut Command) {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(dir) = sidecar_dir() {
+        paths.push(dir);
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        cmd.env("PATH", joined);
+    }
+}
 
 /// On Windows, spawning a console subprocess from a GUI app pops up a flash of
 /// a black console window. CREATE_NO_WINDOW (0x08000000) suppresses it.

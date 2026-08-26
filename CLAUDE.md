@@ -80,11 +80,17 @@ This repo is large; a few habits keep context and cost under control.
   resolves it via `set_resource_dir()` (prod) or `CARGO_MANIFEST_DIR/runtime`
   (dev). Keep `PBS_TAG`/`PY_VER` in lock-step between
   `scripts/install-sidecar.mjs` and `.github/workflows/release.yml`.
-- ffmpeg is still a Tauri **externalBin** sidecar at
-  `src-tauri/binaries/ffmpeg-<target-triple>` (a single self-contained static
-  binary). Run `npm run install-sidecar` after a fresh clone — it downloads the
-  static ffmpeg **and** sets up `src-tauri/runtime/` (CPython + yt-dlp) so the
-  bundle ships complete and depends on neither a system Python nor ffmpeg.
+- ffmpeg and **deno** are Tauri **externalBin** sidecars at
+  `src-tauri/binaries/{ffmpeg,deno}-<target-triple>` (single self-contained
+  static binaries). deno is the JS runtime for yt-dlp's JS-challenge solver
+  (`yt-dlp-ejs`, pip-installed into `runtime/pylib`) — without both, YouTube
+  rejects most downloads with "The page needs to be reloaded". `ytdlp.rs`
+  prepends the sidecar dir to the child PATH so yt-dlp finds deno. Run
+  `npm run install-sidecar` after a fresh clone — it downloads static ffmpeg +
+  deno **and** sets up `src-tauri/runtime/` (CPython + yt-dlp) so the bundle
+  ships complete and depends on no system Python, ffmpeg, or JS runtime. Keep
+  `DENO_VERSION` (and `PBS_TAG`/`PY_VER`) in lock-step between
+  `scripts/install-sidecar.mjs` and `.github/workflows/release.yml`.
 - Dev: `npm run tauri dev` from project root.
 - Release: bump `package.json`, `src-tauri/Cargo.toml`, and
   `src-tauri/tauri.conf.json` to the same version; commit; tag `vX.Y.Z`;
