@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Channel, Video } from "../types";
 import { formatAddedAt, formatDuration, formatUploadDate } from "../utils";
-import { kbd } from "../platform";
+import { isWeb, kbd } from "../platform";
 import { OFFLINE_AUDIO, OFFLINE_BEST } from "../settings";
 import * as api from "../api";
 
@@ -169,15 +169,17 @@ export function VideoDetails({
           </button>
         </div>
 
-        <OfflineSection
-          video={video}
-          percent={offlinePercent}
-          defaultMaxHeight={defaultMaxHeight}
-          onDownload={onDownload}
-          onCancelDownload={onCancelDownload}
-          onPlayOffline={onPlayOffline}
-          onDeleteOffline={onDeleteOffline}
-        />
+        {!isWeb && (
+          <OfflineSection
+            video={video}
+            percent={offlinePercent}
+            defaultMaxHeight={defaultMaxHeight}
+            onDownload={onDownload}
+            onCancelDownload={onCancelDownload}
+            onPlayOffline={onPlayOffline}
+            onDeleteOffline={onDeleteOffline}
+          />
+        )}
 
         <TagEditor video={video} allTags={allTags} onSetTags={onSetTags} />
 
@@ -494,7 +496,7 @@ function TagEditor({
             #{t}
             <button
               onClick={() => commitTags(video.user_tags.filter((x) => x !== t))}
-              className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
+              className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 touch-show transition"
               title="Remove tag"
             >
               ×

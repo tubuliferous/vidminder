@@ -472,6 +472,19 @@ pub fn get_offline_path(conn: &Connection, id: i64) -> Result<Option<String>> {
 }
 
 pub fn delete_video(conn: &Connection, id: i64) -> Result<()> {
+    // A removed library video should reappear as a normal row in its channel
+    // feed. Its feed row may carry dismissed=1 from before the add (e.g.
+    // auto-dismissed backlog at follow time, or added by URL after a manual
+    // dismiss) — un-dismiss it so removal never makes the upload vanish from
+    // the channel view. Matched by URL or video id, same as in_library.
+    conn.execute(
+        r#"UPDATE channel_videos
+           SET dismissed = 0, auto_dismissed_at_follow = 0
+           WHERE url IN (SELECT url FROM videos WHERE id = ?1)
+              OR video_external_id IN
+                 (SELECT video_id FROM videos WHERE id = ?1 AND video_id IS NOT NULL)"#,
+        params![id],
+    )?;
     conn.execute("DELETE FROM videos WHERE id = ?1", params![id])?;
     Ok(())
 }
@@ -1198,6 +1211,12 @@ pub fn resurface_channel_recent(
 /// stores yt-dlp's canonical webpage_url, which can differ from the RSS feed's
 /// watch URL (e.g. /shorts/<id> vs watch?v=<id>, or a video added via a
 /// youtu.be link) — exact-URL matching alone misses those.
+///
+/// Dismissed rows are still returned when the video is in the library: the
+/// channel feed intercalates in-library uploads by date (with the "In list"
+/// badge), and a row dismissed before/after being added must not vanish from
+/// that lineup. Inbox views filter them out client-side via `dismissed` /
+/// `in_library`.
 pub fn list_inbox(conn: &Connection) -> Result<Vec<ChannelVideo>> {
     let mut stmt = conn.prepare(
         r#"SELECT cv.id, cv.channel_id, c.name AS channel_name, c.url AS channel_url,
@@ -1210,6 +1229,9 @@ pub fn list_inbox(conn: &Connection) -> Result<Vec<ChannelVideo>> {
            FROM channel_videos cv
            JOIN channels c ON c.id = cv.channel_id
            WHERE cv.dismissed = 0
+              OR cv.url IN (SELECT url FROM videos)
+              OR cv.video_external_id IN
+                 (SELECT video_id FROM videos WHERE video_id IS NOT NULL)
            ORDER BY COALESCE(cv.upload_timestamp, cv.first_seen_at) DESC, cv.id DESC"#,
     )?;
     let rows = stmt.query_map([], |r| Ok(channel_video_from_row(r)))?;

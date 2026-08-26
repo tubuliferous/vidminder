@@ -104,7 +104,7 @@ export function InboxRow({
       }
     >
       <div
-        className="relative shrink-0 w-[156px] h-[88px] rounded overflow-hidden bg-surface-2"
+        className="relative shrink-0 w-[120px] h-[68px] sm:w-[156px] sm:h-[88px] rounded overflow-hidden bg-surface-2"
       >
         {cv.in_library ? (
           <span className="absolute top-1 left-1 text-[9px] font-bold tracking-[0.06em] uppercase px-1.5 py-[1px] rounded bg-accent/90 text-black shadow-sm inline-flex items-center gap-0.5">
@@ -165,12 +165,14 @@ export function InboxRow({
               "Unknown date"}
           </span>
         </div>
+        {/* flex-wrap + whitespace-nowrap: on narrow (mobile) columns the
+            buttons wrap as whole pills instead of breaking their labels. */}
         <div
-          className="mt-auto pt-2 flex items-center gap-2"
+          className="mt-auto pt-2 flex flex-wrap items-center gap-2 gap-y-1"
           onDoubleClick={(e) => e.stopPropagation()}
         >
           {cv.in_library ? (
-            <span className="text-[12px] px-2.5 py-1 rounded-md inline-flex items-center gap-1 text-accent font-medium">
+            <span className="text-[12px] px-2.5 py-1 rounded-md inline-flex items-center gap-1 text-accent font-medium whitespace-nowrap">
               <span aria-hidden>✓</span> In your list
             </span>
           ) : (
@@ -178,14 +180,14 @@ export function InboxRow({
               <button
                 onClick={onAdd}
                 disabled={busy}
-                className="text-[12px] px-2.5 py-1 rounded-md bg-accent text-black hover:brightness-110 disabled:opacity-50 transition"
+                className="text-[12px] px-2.5 py-1 rounded-md bg-accent text-black hover:brightness-110 disabled:opacity-50 transition whitespace-nowrap"
               >
                 {busy ? "Adding…" : "+ Add to list"}
               </button>
               <button
                 onClick={onDismiss}
                 disabled={busy}
-                className="text-[12px] px-2.5 py-1 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 transition"
+                className="text-[12px] px-2.5 py-1 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 disabled:opacity-50 transition whitespace-nowrap"
               >
                 Dismiss
               </button>
@@ -193,7 +195,7 @@ export function InboxRow({
           )}
           <button
             onClick={onOpen}
-            className="text-[11.5px] text-ink-faint hover:text-ink-dim ml-1 transition"
+            className="text-[11.5px] text-ink-faint hover:text-ink-dim ml-1 transition whitespace-nowrap"
           >
             play in browser
           </button>

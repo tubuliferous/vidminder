@@ -39,7 +39,7 @@ import {
 } from "./utils";
 import { OFFLINE_AUDIO, offlineQualityLabel, useSettings } from "./settings";
 import { ensureRowDragImage } from "./dragImage";
-import { isMac, kbd, kbdClick, shiftClick } from "./platform";
+import { isMac, isWeb, kbd, kbdClick, shiftClick } from "./platform";
 
 type Pending = { id: string; url: string; kind: "video" | "channel" };
 type SortMode = "added" | "uploaded" | "length";
@@ -173,6 +173,10 @@ function App() {
   const [addInput, setAddInput] = useState("");
   const [followOpen, setFollowOpen] = useState(false);
   const [followInput, setFollowInput] = useState("");
+  // Small-screen (below md) navigation drawer holding the sidebar, and the
+  // below-lg bottom sheet that stands in for the right-hand details panel.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("added");
   // Sort direction. "desc" = the natural default for every mode (newest /
@@ -393,7 +397,12 @@ function App() {
 
   // Backend events (e.g. background polling brought in new inbox items)
   useEffect(() => {
-    const ul1 = listen("videos-changed", () => refreshVideos());
+    const ul1 = listen("videos-changed", () => {
+      refreshVideos();
+      // Library membership drives the channel feed's in_library badges and
+      // the Mixed/Separate grouping — keep them in lock-step.
+      refreshInbox();
+    });
     const ul2 = listen("channels-changed", () => {
       refreshChannelsList();
       refreshInbox();
@@ -710,16 +719,40 @@ function App() {
 
   // Single-click an inbox / channel-feed row → show its details on the right.
   // Clears any library selection so the two panels never fight.
-  const handleInboxSelect = useCallback((cv: ChannelVideo) => {
-    setSelectedIds(new Set());
-    setAnchorId(null);
-    setSelectedInboxId(cv.id);
+  // On viewports without the right-hand details panel (below lg), selecting a
+  // row pops the details up as a bottom sheet instead.
+  const openMobileDetails = useCallback(() => {
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      setMobileDetailsOpen(true);
+    }
   }, []);
+
+  const handleInboxSelect = useCallback(
+    (cv: ChannelVideo) => {
+      setSelectedIds(new Set());
+      setAnchorId(null);
+      setSelectedInboxId(cv.id);
+      openMobileDetails();
+    },
+    [openMobileDetails]
+  );
 
   // Mutual exclusion: any library selection wins, dropping the inbox panel.
   useEffect(() => {
     if (selectedIds.size > 0) setSelectedInboxId(null);
   }, [selectedIds]);
+
+  // The mobile details sheet has nothing to show once the selection is gone
+  // (deleted, dismissed, Escape) or the view switches to the inbox, which has
+  // no details panel on desktop either.
+  useEffect(() => {
+    if (
+      filter.kind === "inbox" ||
+      (selectedIds.size === 0 && selectedInboxId === null)
+    ) {
+      setMobileDetailsOpen(false);
+    }
+  }, [filter.kind, selectedIds, selectedInboxId]);
 
   const handleIngestResult = useCallback(
     async (result: IngestResult) => {
@@ -737,9 +770,13 @@ function App() {
         insertVideoLocally(v);
         selectSingle(v.id);
         if (filter.kind === "inbox") setFilter({ kind: "all" });
+        // The video may correspond to a channel-feed row — refresh so its
+        // in_library flag flips (badge + Mixed/Separate grouping).
+        refreshInbox();
         recordUndo(`Added “${v.title.slice(0, 50)}”`, async () => {
           await api.deleteVideo(v.id);
           removeVideoLocally(v.id);
+          refreshInbox();
         });
       } else {
         const ch = result.value;
@@ -806,13 +843,17 @@ function App() {
         pushToast({ kind: "err", text: `Couldn't remove: ${e}` });
         return;
       }
+      // Flip the channel-feed row's in_library flag back off so the feed
+      // (badge, Mixed/Separate grouping) reflects the removal immediately.
+      refreshInbox();
       recordUndo(`Removed “${target.title.slice(0, 50)}”`, async () => {
         const restored = await api.restoreVideo(target);
         insertVideoLocally(restored);
         selectSingle(restored.id);
+        refreshInbox();
       });
     },
-    [insertVideoLocally, pushToast, recordUndo, removeVideoLocally, selectSingle]
+    [insertVideoLocally, pushToast, recordUndo, refreshInbox, removeVideoLocally, selectSingle]
   );
 
   // -----------------------------------------------------------------------
@@ -1155,6 +1196,7 @@ function App() {
         (_, i) => results[i].status === "fulfilled"
       );
       if (successfullyDeleted.length > 0) {
+        refreshInbox();
         recordUndo(
           `Removed ${successfullyDeleted.length} videos`,
           async () => {
@@ -1167,11 +1209,12 @@ function App() {
               return next;
             });
             setSelectedIds(new Set(restored.map((r) => r.id)));
+            refreshInbox();
           }
         );
       }
     },
-    [clearSelection, handleDeleteVideo, pushToast, recordUndo]
+    [clearSelection, handleDeleteVideo, pushToast, recordUndo, refreshInbox]
   );
 
   const handleToggleWatched = useCallback(
@@ -1261,28 +1304,32 @@ function App() {
       const items: MenuItem[] = [
         { label: "Open on YouTube", onClick: () => handleOpenAndMarkWatched(video) },
       ];
-      if (status === "ready") {
-        items.push({ label: "Play downloaded file", onClick: () => handlePlayOffline(video) });
+      // Offline downloads / file export are desktop-only (the web Worker has
+      // no yt-dlp/ffmpeg) — skip the whole section on web.
+      if (!isWeb) {
+        if (status === "ready") {
+          items.push({ label: "Play downloaded file", onClick: () => handlePlayOffline(video) });
+          items.push({
+            label: `Show in ${isMac ? "Finder" : "Explorer"}`,
+            onClick: () => handleRevealOfflineFile(video.id),
+          });
+        }
+        // Available for every status — non-downloaded videos download first.
         items.push({
-          label: `Show in ${isMac ? "Finder" : "Explorer"}`,
-          onClick: () => handleRevealOfflineFile(video.id),
+          label: "Export video file…",
+          onClick: () => handleExportVideo(video),
         });
-      }
-      // Available for every status — non-downloaded videos download first.
-      items.push({
-        label: "Export video file…",
-        onClick: () => handleExportVideo(video),
-      });
-      items.push({ kind: "separator" });
-      if (status === "ready") {
-        items.push({ label: "Remove download", onClick: () => handleDeleteOffline(video.id) });
-      } else if (status === "downloading") {
-        items.push({ label: "Cancel download", onClick: () => handleCancelDownload(video.id) });
-      } else {
-        items.push({
-          label: `Download (${offlineQualityLabel(settings.offlineMaxHeight)})`,
-          onClick: () => handleDownloadVideo(video.id, settings.offlineMaxHeight),
-        });
+        items.push({ kind: "separator" });
+        if (status === "ready") {
+          items.push({ label: "Remove download", onClick: () => handleDeleteOffline(video.id) });
+        } else if (status === "downloading") {
+          items.push({ label: "Cancel download", onClick: () => handleCancelDownload(video.id) });
+        } else {
+          items.push({
+            label: `Download (${offlineQualityLabel(settings.offlineMaxHeight)})`,
+            onClick: () => handleDownloadVideo(video.id, settings.offlineMaxHeight),
+          });
+        }
       }
       items.push(
         { kind: "separator" },
@@ -1748,8 +1795,9 @@ function App() {
         return;
       }
       selectSingle(video.id);
+      openMobileDetails();
     },
-    [anchorId, selectSingle]
+    [anchorId, selectSingle, openMobileDetails]
   );
 
   // Shift-drag selection: on shift+mousedown we mark a drag anchor, and as the
@@ -2054,7 +2102,10 @@ function App() {
     const q = search.trim().toLowerCase();
     const items = inbox.filter((cv) => {
       if (cv.channel_id !== filter.channelId) return false;
-      if (cv.dismissed) return false;
+      // Dismissal hides a row from the inbox, but an in-library video still
+      // belongs in the channel lineup (badged) — e.g. one auto-dismissed at
+      // follow time and added later by URL.
+      if (cv.dismissed && !cv.in_library) return false;
       if (!settings.showShorts && cv.is_short) return false;
       // Added videos are intercalated by default; the preference pulls them
       // back out into the separate "In your list" section below.
@@ -2085,8 +2136,14 @@ function App() {
   const channelLibraryExtras = useMemo(() => {
     if (filter.kind !== "channel") return filtered;
     if (settings.separateAddedInChannels) return filtered;
-    const shown = new Set(channelInboxItems.map((cv) => cv.url));
-    return filtered.filter((v) => !shown.has(v.url));
+    // Match by URL *or* YouTube video id — the library stores yt-dlp's
+    // canonical URL (e.g. /shorts/<id>), which can differ from the feed row's
+    // watch URL; URL equality alone would list such videos twice.
+    const shownUrls = new Set(channelInboxItems.map((cv) => cv.url));
+    const shownIds = new Set(channelInboxItems.map((cv) => cv.video_external_id));
+    return filtered.filter(
+      (v) => !shownUrls.has(v.url) && !(v.video_id && shownIds.has(v.video_id))
+    );
   }, [filter, filtered, channelInboxItems, settings.separateAddedInChannels]);
 
   const channelInboxGrouped = useMemo(() => {
@@ -2327,18 +2384,89 @@ function App() {
   // Render
   // ---------------------------------------------------------------------------
 
+  // The selection-driven details panel, shared between the desktop right-hand
+  // column (lg+) and the mobile bottom sheet (below lg).
+  const selectionDetailsPane =
+    selectedVideos.length > 1 ? (
+      <MultiVideoDetails
+        videos={selectedVideos}
+        allTags={allKnownTags}
+        onSetWatched={handleSetWatchedMany}
+        onSetFavorite={handleSetFavoriteMany}
+        onAddTag={handleAddTagMany}
+        onRemoveTag={handleRemoveTagMany}
+        onDeleteAll={handleDeleteVideos}
+        onClearSelection={clearSelection}
+        defaultMaxHeight={settings.offlineMaxHeight}
+        onBatchDownload={handleBatchDownload}
+        onBatchRemoveDownloads={handleBatchRemoveDownloads}
+      />
+    ) : selectedVideo ? (
+      <VideoDetails
+        video={selectedVideo}
+        followedChannels={channels}
+        allTags={allKnownTags}
+        onSetTags={handleSetTags}
+        onToggleWatched={handleToggleWatched}
+        onToggleFavorite={handleToggleFavorite}
+        onOpen={handleOpenAndMarkWatched}
+        onRequestDelete={() => handleDeleteVideo(selectedVideo)}
+        onFollowChannel={handleFollowChannelFromVideo}
+        followBusy={
+          !!selectedVideo.channel_url &&
+          followingUrls.has(selectedVideo.channel_url)
+        }
+        offlinePercent={downloads.get(selectedVideo.id)}
+        defaultMaxHeight={settings.offlineMaxHeight}
+        onDownload={(v, h) => handleDownloadVideo(v.id, h)}
+        onCancelDownload={(v) => handleCancelDownload(v.id)}
+        onPlayOffline={handlePlayOffline}
+        onDeleteOffline={(v) => handleDeleteOffline(v.id)}
+      />
+    ) : selectedInbox ? (
+      <ChannelVideoDetails
+        cv={selectedInbox}
+        busy={inboxBusy.has(selectedInbox.id)}
+        onAdd={() => handleAddFromInbox(selectedInbox)}
+        onDismiss={() => handleDismissInboxItem(selectedInbox)}
+        onOpen={() => handleOpenInboxItem(selectedInbox)}
+      />
+    ) : null;
+
   return (
     <div className="h-full flex flex-col relative">
       <div className="flex flex-1 min-h-0">
+        {/* Below md the sidebar lives in a slide-in drawer behind the ☰
+            button; at md+ the wrapper goes static and renders exactly the
+            fixed column it always was. */}
+        {mobileNavOpen && (
+          <div
+            className="fixed inset-0 z-[65] bg-black/45 md:hidden"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
+        <div
+          className={
+            "h-full fixed inset-y-0 left-0 z-[70] transition-transform duration-200 shadow-2xl " +
+            "md:static md:z-auto md:translate-x-0 md:shadow-none " +
+            (mobileNavOpen ? "translate-x-0" : "-translate-x-full")
+          }
+        >
         <Sidebar
           videos={videos}
           channels={channels}
           inboxCount={inboxCount}
           filter={filter}
-          onFilter={setFilter}
+          onFilter={(f) => {
+            setFilter(f);
+            setMobileNavOpen(false);
+          }}
           onRefresh={handleRefresh}
           refreshing={refreshing}
-          onFollowClick={() => setFollowOpen((x) => !x)}
+          onFollowClick={() => {
+            setFollowOpen((x) => !x);
+            setMobileNavOpen(false);
+          }}
           draggingVideo={draggingVideo}
           onDropToTag={(id, tag) => {
             const v = videos.find((x) => x.id === id);
@@ -2387,11 +2515,26 @@ function App() {
               }
             );
           }}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+            setMobileNavOpen(false);
+          }}
         />
+        </div>
 
         <main className="flex-1 min-w-0 flex flex-col">
-          <header className="h-12 shrink-0 border-b border-line bg-surface flex items-center px-4 gap-3">
+          <header className="h-12 shrink-0 border-b border-line bg-surface flex items-center px-3 md:px-4 gap-2 md:gap-3">
+            <button
+              onClick={() => setMobileNavOpen(true)}
+              className="md:hidden relative shrink-0 w-8 h-8 rounded-md text-ink-dim hover:text-ink hover:bg-surface-2 transition flex items-center justify-center text-[17px]"
+              title="Open navigation"
+              aria-label="Open navigation"
+            >
+              ☰
+              {inboxCount > 0 && (
+                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-accent" />
+              )}
+            </button>
             <input
               type="search"
               value={search}
@@ -2401,7 +2544,7 @@ function App() {
                   ? "Search inbox by title, channel, or date…"
                   : "Search title, description, uploader, tags…"
               }
-              className="flex-1 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
+              className="flex-1 min-w-0 max-w-xl text-[13px] px-3 py-1.5 rounded-md bg-canvas border border-line focus:outline-none focus:border-accent"
             />
             <div className="text-[11.5px] text-ink-faint hidden md:block">
               {kbd("K")} search · {kbd("V")} paste · {kbd("A")} select all · {kbd("Z")} undo · Delete remove
@@ -2441,7 +2584,7 @@ function App() {
               onClick={() => setAddOpen((x) => !x)}
               className="text-[13px] px-3 py-1.5 rounded-md bg-accent text-black hover:brightness-110 transition shrink-0"
             >
-              + Add URL
+              + Add<span className="hidden sm:inline"> URL</span>
             </button>
           </header>
 
@@ -2498,7 +2641,7 @@ function App() {
           )}
 
           {filter.kind === "channel" && currentChannel && (
-            <div className="shrink-0 border-b border-line bg-surface px-4 py-2 flex items-center gap-3">
+            <div className="shrink-0 border-b border-line bg-surface px-4 py-2 flex flex-wrap items-center gap-3 gap-y-1">
               {currentChannel.thumbnail_url && (
                 <img
                   src={currentChannel.thumbnail_url}
@@ -2526,12 +2669,14 @@ function App() {
                   date (badged) or pulled out into the "In your list" section.
                   Same preference as the Settings toggle, surfaced here. */}
               <div
-                className="flex items-center rounded-md border border-line overflow-hidden"
+                className="flex items-center gap-1.5"
                 title='Show videos already in your list mixed into the feed by date, or separated into their own "In your list" section'
               >
+                <span className="text-[11px] text-ink-faint">Saved videos:</span>
+                <div className="flex items-center rounded-md border border-line overflow-hidden">
                 {([
-                  { separate: false, label: "Mixed" },
-                  { separate: true, label: "Separate" },
+                  { separate: false, label: "In feed" },
+                  { separate: true, label: "Own section" },
                 ] as const).map(({ separate, label }) => (
                   <button
                     key={label}
@@ -2548,6 +2693,7 @@ function App() {
                     {label}
                   </button>
                 ))}
+                </div>
               </div>
               <button
                 onClick={() => handleResurfaceChannel(currentChannel.id)}
@@ -2753,15 +2899,17 @@ function App() {
                                 setCardMenu({ video: v, x, y })
                               }
                               onNativeFileDrag={
-                                isMac || v.offline_status === "ready"
+                                !isWeb && (isMac || v.offline_status === "ready")
                                   ? () => handleNativeFileDrag(v)
                                   : undefined
                               }
                               onDragOutExport={() =>
                                 handleDragOutExport(v)
                               }
-                              onExportFile={() =>
-                                handleExportVideo(v)
+                              onExportFile={
+                                !isWeb
+                                  ? () => handleExportVideo(v)
+                                  : undefined
                               }
                             />
                           </li>
@@ -2817,12 +2965,17 @@ function App() {
                           setCardMenu({ video: v, x, y })
                         }
                         onNativeFileDrag={
-                          isMac || v.offline_status === "ready"
+                          !isWeb && (isMac || v.offline_status === "ready")
                             ? () => handleNativeFileDrag(v)
                             : undefined
                         }
                         onDragOutExport={() => handleDragOutExport(v)}
-                        onExportFile={() => handleExportVideo(v)}
+                        // No export on the web: without this gate the button
+                        // still renders invisibly (opacity-0) and an
+                        // accidental tap on the row edge throws.
+                        onExportFile={
+                          !isWeb ? () => handleExportVideo(v) : undefined
+                        }
                       />
                     </li>
                   ))}
@@ -2832,56 +2985,8 @@ function App() {
 
             {filter.kind !== "inbox" && (
               <div className="w-[360px] shrink-0 hidden lg:flex">
-                {selectedVideos.length > 1 ? (
-                  <div className="w-full">
-                    <MultiVideoDetails
-                      videos={selectedVideos}
-                      allTags={allKnownTags}
-                      onSetWatched={handleSetWatchedMany}
-                      onSetFavorite={handleSetFavoriteMany}
-                      onAddTag={handleAddTagMany}
-                      onRemoveTag={handleRemoveTagMany}
-                      onDeleteAll={handleDeleteVideos}
-                      onClearSelection={clearSelection}
-                      defaultMaxHeight={settings.offlineMaxHeight}
-                      onBatchDownload={handleBatchDownload}
-                      onBatchRemoveDownloads={handleBatchRemoveDownloads}
-                    />
-                  </div>
-                ) : selectedVideo ? (
-                  <div className="w-full">
-                    <VideoDetails
-                      video={selectedVideo}
-                      followedChannels={channels}
-                      allTags={allKnownTags}
-                      onSetTags={handleSetTags}
-                      onToggleWatched={handleToggleWatched}
-                      onToggleFavorite={handleToggleFavorite}
-                      onOpen={handleOpenAndMarkWatched}
-                      onRequestDelete={() => handleDeleteVideo(selectedVideo)}
-                      onFollowChannel={handleFollowChannelFromVideo}
-                      followBusy={
-                        !!selectedVideo.channel_url &&
-                        followingUrls.has(selectedVideo.channel_url)
-                      }
-                      offlinePercent={downloads.get(selectedVideo.id)}
-                      defaultMaxHeight={settings.offlineMaxHeight}
-                      onDownload={(v, h) => handleDownloadVideo(v.id, h)}
-                      onCancelDownload={(v) => handleCancelDownload(v.id)}
-                      onPlayOffline={handlePlayOffline}
-                      onDeleteOffline={(v) => handleDeleteOffline(v.id)}
-                    />
-                  </div>
-                ) : selectedInbox ? (
-                  <div className="w-full">
-                    <ChannelVideoDetails
-                      cv={selectedInbox}
-                      busy={inboxBusy.has(selectedInbox.id)}
-                      onAdd={() => handleAddFromInbox(selectedInbox)}
-                      onDismiss={() => handleDismissInboxItem(selectedInbox)}
-                      onOpen={() => handleOpenInboxItem(selectedInbox)}
-                    />
-                  </div>
+                {selectionDetailsPane ? (
+                  <div className="w-full">{selectionDetailsPane}</div>
                 ) : filter.kind === "channel" && currentChannel ? (
                   <div className="w-full">
                     <ChannelDetails
@@ -2906,6 +3011,37 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* Below lg there is no right-hand details column; the same panel rides
+          in a bottom sheet that opens when a row is tapped. */}
+      {mobileDetailsOpen && filter.kind !== "inbox" && selectionDetailsPane && (
+        <div
+          className="fixed inset-0 z-[60] lg:hidden flex flex-col bg-black/45"
+          onClick={() => setMobileDetailsOpen(false)}
+        >
+          <div
+            className="mt-auto w-full max-h-[85vh] flex flex-col rounded-t-xl border-t border-line bg-surface shadow-2xl overflow-hidden pb-[env(safe-area-inset-bottom)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shrink-0 flex items-center justify-between pl-4 pr-2 py-1.5 border-b border-line">
+              <span className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint">
+                {selectedVideos.length > 1
+                  ? `${selectedVideos.length} selected`
+                  : "Details"}
+              </span>
+              <button
+                onClick={() => setMobileDetailsOpen(false)}
+                className="w-8 h-8 rounded-md text-ink-faint hover:text-ink hover:bg-surface-2 transition"
+                title="Close"
+                aria-label="Close details"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">{selectionDetailsPane}</div>
+          </div>
+        </div>
+      )}
 
       {dragHover && (
         <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-canvas/85 backdrop-blur-sm">
@@ -2989,7 +3125,7 @@ function App() {
         }}
       />
 
-      <div className="fixed bottom-3 right-3 z-40 flex flex-col gap-2 max-w-sm pointer-events-none">
+      <div className="toast-stack fixed bottom-3 right-3 z-40 flex flex-col gap-2 max-w-sm pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}

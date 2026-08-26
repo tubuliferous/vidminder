@@ -102,8 +102,22 @@ body,
   margin: 0;
 }
 
+/* Mobile Safari's dynamic toolbars make 100% clip at the bottom; dvh tracks
+   the visible viewport. Old WebKit (Monterey/Safari 15.x) lacks dvh — the
+   @supports guard keeps it on the 100% fallback above. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
 body {
   overflow: hidden;
+  /* The app scrolls in inner panes only; without this, mobile browsers turn a
+     rubber-band overscroll into pull-to-refresh and reload the whole app. */
+  overscroll-behavior-y: none;
   background-color: rgb(var(--color-canvas));
   color: rgb(var(--color-ink));
 }
@@ -125,4 +139,30 @@ button {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Touch screens have no hover, so hover-revealed controls (favorite star,
+   sidebar channel buttons, tag-remove ✕) would be unreachable. Tag them with
+   `touch-show` alongside `opacity-0 group-hover:opacity-100`; this rule sits
+   after @tailwind utilities so it wins the equal-specificity tie. */
+@media (pointer: coarse) {
+  .touch-show {
+    opacity: 1;
+  }
+}
+
+/* iOS Safari auto-zooms the page when focusing any input rendered under 16px.
+   Bump form controls to 16px on small touch screens only. */
+@media (max-width: 767px) and (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Keep toasts above the iPhone home indicator. Browsers without env() drop
+   the declaration and fall back to the Tailwind bottom-3 on the element. */
+.toast-stack {
+  bottom: calc(0.75rem + env(safe-area-inset-bottom));
 }

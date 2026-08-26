@@ -5,7 +5,7 @@ import {
   OFFLINE_QUALITY_PRESETS,
   POLL_INTERVAL_PRESETS,
 } from "../settings";
-import { kbd } from "../platform";
+import { isWeb, kbd } from "../platform";
 
 type Props = {
   open: boolean;
@@ -154,6 +154,7 @@ export function SettingsDialog({
           </div>
         </section>
 
+        {!isWeb && (
         <section className="mt-6 pt-5 border-t border-line">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
             Offline downloads
@@ -180,6 +181,7 @@ export function SettingsDialog({
             )?.hint ?? ""}
           </div>
         </section>
+        )}
 
         <section className="mt-6 pt-5 border-t border-line">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
@@ -240,6 +242,7 @@ export function SettingsDialog({
           </label>
         </section>
 
+        {!isWeb && (
         <section className="mt-6 pt-5 border-t border-line">
           <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
             YouTube authentication
@@ -263,6 +266,24 @@ export function SettingsDialog({
             yt-dlp for all requests.
           </div>
         </section>
+        )}
+
+        {isWeb && (
+          <section className="mt-6 pt-5 border-t border-line">
+            <div className="text-[11px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-2">
+              Account
+            </div>
+            <button
+              onClick={() => {
+                fetch("/api/logout", { method: "POST", credentials: "same-origin" })
+                  .finally(() => window.location.reload());
+              }}
+              className="text-[12.5px] py-1.5 px-3 rounded-md border border-line text-ink-dim hover:text-ink hover:bg-surface-2 transition"
+            >
+              Log out
+            </button>
+          </section>
+        )}
 
         <section className="mt-6 pt-5 border-t border-line text-[11.5px] text-ink-faint leading-relaxed">
           <div className="font-semibold text-ink-dim mb-1">Tips</div>

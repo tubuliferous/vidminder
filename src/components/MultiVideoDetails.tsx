@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Video } from "../types";
-import { kbdClick, shiftClick } from "../platform";
+import { isWeb, kbdClick, shiftClick } from "../platform";
 import { OFFLINE_QUALITY_PRESETS } from "../settings";
 
 type Props = {
@@ -198,6 +198,7 @@ export function MultiVideoDetails({
           </button>
         </div>
 
+        {!isWeb && (
         <div>
           <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
             Offline
@@ -253,6 +254,7 @@ export function MultiVideoDetails({
             </button>
           )}
         </div>
+        )}
 
         <div>
           <label className="block text-[10px] font-semibold tracking-[0.12em] uppercase text-ink-faint mb-1.5">
@@ -277,7 +279,7 @@ export function MultiVideoDetails({
                   #{t}
                   <button
                     onClick={() => onRemoveTag(videos, t)}
-                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 touch-show transition"
                     title={`Remove #${t} from all`}
                   >
                     ×
@@ -300,14 +302,14 @@ export function MultiVideoDetails({
                   </span>
                   <button
                     onClick={() => onAddTag(videos, tag)}
-                    className="text-ink-faint hover:text-accent opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-accent opacity-0 group-hover:opacity-100 touch-show transition"
                     title={`Add #${tag} to remaining ${n - count}`}
                   >
                     +
                   </button>
                   <button
                     onClick={() => onRemoveTag(videos, tag)}
-                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 transition"
+                    className="text-ink-faint hover:text-danger opacity-0 group-hover:opacity-100 touch-show transition"
                     title={`Remove #${tag} from ${count} that have it`}
                   >
                     ×

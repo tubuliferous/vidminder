@@ -619,14 +619,14 @@ function ChannelRow({
               ? `Category: ${channel.category} — click to edit`
               : "Set a category"
           }
-          className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-accent transition"
+          className="opacity-0 group-hover:opacity-100 touch-show text-ink-faint hover:text-accent transition"
         >
           <TagIcon />
         </button>
         <button
           onClick={openOnYouTube}
           title={`Open ${channel.name} on YouTube`}
-          className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-accent transition"
+          className="opacity-0 group-hover:opacity-100 touch-show text-ink-faint hover:text-accent transition"
         >
           <ExternalLinkIcon />
         </button>

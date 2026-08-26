@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    // tsc doesn't see Vite's resolve.alias — mirror the Tauri shims here so
+    // typechecking the shared desktop src (../src) resolves them.
+    "paths": {
+      "@tauri-apps/api/core": ["src/shims/tauri-core.ts"],
+      "@tauri-apps/api/event": ["src/shims/tauri-misc.ts"],
+      "@tauri-apps/api/path": ["src/shims/tauri-misc.ts"],
+      "@tauri-apps/api/app": ["src/shims/tauri-misc.ts"],
+      "@tauri-apps/plugin-opener": ["src/shims/tauri-misc.ts"],
+      "@tauri-apps/plugin-dialog": ["src/shims/tauri-misc.ts"],
+      "@tauri-apps/plugin-deep-link": ["src/shims/tauri-misc.ts"]
+    }
+  },
+  "include": ["src", "../src"]
+}

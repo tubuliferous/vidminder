@@ -6,6 +6,7 @@ import {
   DRAG_MIME,
 } from "../utils";
 import { cachedRowDragImage, ensureRowDragImage } from "../dragImage";
+import { isWeb } from "../platform";
 import * as api from "../api";
 
 type Props = {
@@ -185,23 +186,25 @@ export function VideoCard({
             "absolute top-1 left-1 w-6 h-6 rounded-full flex items-center justify-center transition " +
             (video.favorite
               ? "bg-black/55 text-[#ffd66e] opacity-100"
-              : "bg-black/45 text-white/85 opacity-0 group-hover:opacity-100 hover:bg-black/65")
+              : "bg-black/45 text-white/85 opacity-0 group-hover:opacity-100 touch-show hover:bg-black/65")
           }
         >
           <StarIcon filled={video.favorite} size={13} />
         </button>
-        <DownloadButton
-          status={video.offline_status}
-          percent={offlinePercent}
-          onDownload={onDownloadDefault}
-          onCancel={onCancelDownload}
-          onPlay={onPlayOffline}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onRequestQualityMenu(e.clientX, e.clientY);
-          }}
-        />
+        {!isWeb && (
+          <DownloadButton
+            status={video.offline_status}
+            percent={offlinePercent}
+            onDownload={onDownloadDefault}
+            onCancel={onCancelDownload}
+            onPlay={onPlayOffline}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRequestQualityMenu(e.clientX, e.clientY);
+            }}
+          />
+        )}
         {video.offline_status === "downloading" && (
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/45">
             <div

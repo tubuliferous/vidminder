@@ -17,6 +17,14 @@ const detectMac = (): boolean => {
 
 export const isMac = detectMac();
 
+/// True when running as the Cloudflare web app (web/ compiles this same src
+/// tree with Tauri shims). Gates desktop-only capabilities: offline
+/// downloads, file export, native drags. Detection: Tauri injects
+/// __TAURI_INTERNALS__ into its webview; a plain browser doesn't have it.
+export const isWeb =
+  typeof window !== "undefined" &&
+  !("__TAURI_INTERNALS__" in (window as unknown as Record<string, unknown>));
+
 /// The Cmd/Ctrl modifier name — "⌘" on macOS, "Ctrl" everywhere else.
 export const mod = isMac ? "⌘" : "Ctrl";
 

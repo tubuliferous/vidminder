@@ -1,0 +1,30 @@
+{
+  // VidMinder web — single Worker serving both the API (/api/*) and the
+  // built React frontend (static assets with SPA fallback).
+  "name": "vidminder",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    // API routes must reach the Worker even though assets exist.
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vidminder",
+      "database_id": "43c82f35-e8bf-4ace-881a-7bfcc4ba4f85"
+    }
+  ],
+  "triggers": {
+    // Poll followed channels' RSS feeds twice an hour.
+    "crons": ["*/30 * * * *"]
+  },
+  "vars": {
+    // If non-empty, signup requires this invite code. Change it (or use
+    // `wrangler secret put SIGNUP_CODE` to keep it out of the repo).
+    "SIGNUP_CODE": "vm-8f5b6a2dbbc4"
+  },
+  "observability": { "enabled": true }
+}
